@@ -16,63 +16,130 @@ def printPrettyMap( map ):
 # IType
 #
 class IType:
-    def __init__( self, die ):
+    def __init__( self, dies, die ):
+        self.dies = dies
         self.die = die
 
-    @staticmethod
-    def getName( die ):
+    def getName( self ):
         try:
-            return bytes2str( die.attributes[ 'DW_AT_name' ].value )
+            return bytes2str( self.die.attributes[ 'DW_AT_name' ].value )
         except KeyError:
             return "?"
 
-    def getType( die ):
+    def typeId():
+        pass
+
+    def getTypeId( self ):
         try:
-            return die.attributes[ 'DW_AT_type' ].value
+            return self.die.attributes[ 'DW_AT_type' ].value
         except KeyError:
             return -1
 
-class BaseType( IType ):
-    def __init__( self, die ):
-        IType.__init__( self, die )
+    def isBasic( self ):
+        return True
+
+    def isTemplate( self ):
+        if self.isBasic():
+            return False
+
+        name = self.getName()
+
+        leftAngleBracketCount = name.count( "<" )
+        rightAngleBracketCount = name.count( ">" )
+
+        if leftAngleBracketCount != rightAngleBracketCount:
+            raise Exception( "Type name %s is not a valid template name" % name )
+        elif leftAngleBracketCount == 0:
+            return False
+        else:
+            return True
+
+    def isInternalLibrary( self ):
+        return self.getName().startswith( "_" )
 
     def __str__( self ):
-        return "base: " + self.getName( self.die )
+        pass
+
+class InvalidType( IType ):
+    def __init__( self ):
+        IType.__init__( self, None, None )
+
+    def typeId( self ):
+        return "?invalid?"
+
+    def getName( self ):
+        return "?invalid?"
+
+    def __str__( self ):
+        return self.typeId()
+
+class BaseType( IType ):
+    def __init__( self, dies, die ):
+        IType.__init__( self, dies, die )
+
+    def typeId( self ):
+        return "base"
+
+    def __str__( self ):
+        return self.typeId() + " : " + self.getName()
 
 class PtrType( IType ):
-    def __init__( self, die ):
-        IType.__init__( self, die )
+    def __init__( self, dies, die ):
+        IType.__init__( self, dies, die )
+
+    def typeId( self ):
+        return "ptr"
 
     def __str__( self ):
-        return "ptr: " + str( IType.getType( self.die ) )
+        id = self.getTypeId()
 
-class RefType( IType ):
-    def __init__( self, die ):
-        IType.__init__( self, die )
+        if id == -1:
+            pointedType = InvalidType()
+        else:
+            pointedType = self.dies.get( id, InvalidType() )
 
-    def __str__( self ):
-        return "ref: " + str( IType.getType( self.die ) )
+        return self.typeId() + " : " + str( id ) + " -> " + pointedType.getName()
+
+class RefType( PtrType ):
+    def __init__( self, dies, die ):
+        IType.__init__( self, dies, die )
+
+    def typeId( self ):
+        return "ref"
 
 class ArrayType( IType ):
-    def __init__( self, die ):
-        IType.__init__( self, die )
+    def __init__( self, dies, die ):
+        IType.__init__( self, dies, die )
+
+    def typeId( self ):
+        return "array"
 
     def __str__( self ):
-        return "Array: " + str( IType.getType( self.die ) )
+        return self.typeId() + " : " + str( self.getTypeId() )
 
 class Typedef( IType ):
-    def __init__( self, die ):
-        IType.__init__( self, die )
+    def __init__( self, dies, die ):
+        IType.__init__( self, dies, die )
 
     def getBaseType( self ):
-        return IType.getType( self.die )
+        return self.getTypeId()
+
+    def typeId( self ):
+        return "typedef"
 
     def __str__( self ):
-        return "typedef: " + self.getName( self.die ) + " -> " + str( self.getBaseType() )
+        id = self.getBaseType()
+
+        if id == -1:
+            typedefedType = InvalidType()
+        else:
+            typedefedType = self.dies.get( id, InvalidType() )
+
+        return self.typeId() + " : " + self.getName() + " : " + str( id ) + "\n\t" + str( typedefedType )
 
 class Struct( IType ):
-    def __init__( self, die ):
-        IType.__init__( self, die )
+    def __init__( self, dies, die ):
+        IType.__init__( self, dies, die )
 
         self.members_skip_tags = [
               'DW_TAG_subprogram'
@@ -90,29 +157,18 @@ class Struct( IType ):
 
             yield child
 
-    def isTemplate( self ):
-        name = self.getName()
+    def isBasic( self ):
+        return False
 
-        leftAngleBracketCount = name.count( "<" )
-        rightAngleBracketCount = name.count( ">" )
-
-        if leftAngleBracketCount != rightAngleBracketCount:
-            raise Exception( "Type name %s is not a valid template name" % name )
-        elif leftAngleBracketCount == 0:
-            return False
-        else:
-            return True
-
-    @staticmethod
-    def _isStaticMember( die ):
-        return 'DW_AT_external' in die.attributes
+    def typeId( self ):
+        return "struct"
 
     def __str__( self ):
-        result = "struct: " + self.getName( self.die )
+        result = self.typeId() + " : " + self.getName()
 
         for component in self.components():
             tag = component.tag
-            offset = str( component.offset )
+            elf_offset = str( component.offset )
 
             try:
                 name = component.attributes[ "DW_AT_name" ].value.decode( "utf-8" )
@@ -124,10 +180,24 @@ class Struct( IType ):
             except KeyError:
                 type = -1
 
-            result += '\n\t' + tag + " : " + offset + " : " + name + " : of type " + str( type )
+            if type == -1:
+                memberType = InvalidType()
+            else:
+                memberType = self.dies.get( type, InvalidType() )
+
+            try:
+                this_offset = component.attributes[ "DW_AT_data_member_location" ].value[1]
+            except KeyError:
+                this_offset = "-1"
+                
+            result += '\n\t' + tag + " : " + elf_offset + " : " + name \
+                + " : +" + str( this_offset ) + " : of type\n\t" + str( memberType )
 
         return result
 
+    @staticmethod
+    def _isStaticMember( die ):
+        return 'DW_AT_external' in die.attributes
 #
 # TypeFactoryImpl
 #
@@ -147,39 +217,39 @@ class TypeFactoryImpl:
         self.TypesFactory[ 'DW_TAG_structure_type' ] = TypeFactoryImpl._createStruct
         self.TypesFactory[ 'DW_TAG_clsss_type' ] = TypeFactoryImpl._createClass
 
-    def create( self, die ):
-        return self.TypesFactory[ die.tag ]( self, die )
+    def create( self, dies, die ):
+        return self.TypesFactory[ die.tag ]( self, dies, die )
 
     def types( self ):
         return self.TypesFactory.keys()
 
     @staticmethod
-    def _createBaseType( self, die ):
-        return BaseType( die )
+    def _createBaseType( self, dies, die ):
+        return BaseType( dies, die )
 
     @staticmethod
-    def _createTypedef( self, die ):
-        return Typedef( die )
+    def _createTypedef( self, dies, die ):
+        return Typedef( dies, die )
 
     @staticmethod
-    def _createStruct( self, die ):
-        return Struct( die )
+    def _createStruct( self, dies, die ):
+        return Struct( dies, die )
 
     @staticmethod
-    def _createClass( self, die ):
-        return self._createStruct( die )
+    def _createClass( self, dies, die ):
+        return self._createStruct( dies, die )
 
     @staticmethod
-    def _createPtrType( self, die ):
-        return PtrType( die )
+    def _createPtrType( self, dies, die ):
+        return PtrType( dies, die )
 
     @staticmethod
-    def _createRefType( self, die ):
-        return RefType( die )
+    def _createRefType( self, dies, die ):
+        return RefType( dies, die )
 
     @staticmethod
-    def _createArrayType( self, die ):
-        return ArrayType( die )
+    def _createArrayType( self, dies, die ):
+        return ArrayType( dies, die )
 
 class TypeFactory:
     def __init__( self ):
@@ -211,6 +281,9 @@ class ClassCompacter:
 
             self._processDWARF( elfFile )
 
+    def getDIEs( self ):
+        return self.dies
+
     def _processDWARF( self, elfFile ):
         if not elfFile.has_dwarf_info():
             print( "File %s has no DWARF info" % fileName )
@@ -222,11 +295,21 @@ class ClassCompacter:
             topDIE = cu.get_top_DIE()
             self._processDIERecursively( topDIE )
 
-        printPrettyMap( self.dies )
+        for k, v in self.dies.items():
+            #if v.isBasic() == True:
+            #    continue
+
+            #if v.isTemplate() == True:
+            #    continue
+
+            #if v.isInternalLibrary():
+            #    continue
+
+            print( "%d : %s" % ( k, v ) )
 
     def _processDIERecursively( self, die ):
         if die.tag in TypeFactory().get().types():
-            self.dies[ die.offset ] = TypeFactory().get().create( die )
+            self.dies[ die.offset ] = TypeFactory().get().create( self.getDIEs(), die )
 
         for child in die.iter_children():
             self._processDIERecursively( child )
