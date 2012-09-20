@@ -29,6 +29,9 @@ class IDIEType:
     def typeId():
         pass
 
+    def getDIE( self ):
+        return self.die
+
     def getTypeId( self ):
         try:
             return self.die.attributes[ 'DW_AT_type' ].value
@@ -37,6 +40,12 @@ class IDIEType:
 
     def isBasic( self ):
         return True
+
+    def isClass( self ):
+        try:
+            return self.die.tag() == 'DW_TAG_structure_type' or 'DW_TAG_class_type'
+        except KeyError:
+            return False
 
     def isTemplate( self ):
         if self.isBasic():
@@ -137,7 +146,7 @@ class DIETypedef( IDIEType ):
 
         return self.typeId() + " : " + self.getName() + " : " + str( id ) + "\n\t" + str( DIETypedefedType )
 
-class DIEStruct( IDIEType ):
+class DIEClass( IDIEType ):
     def __init__( self, dies, die ):
         IDIEType.__init__( self, dies, die )
 
@@ -189,7 +198,7 @@ class DIEStruct( IDIEType ):
                 this_offset = component.attributes[ "DW_AT_data_member_location" ].value[1]
             except KeyError:
                 this_offset = "-1"
-                
+
             result += '\n\t' + tag + " : " + elf_offset + " : " + name \
                 + " : +" + str( this_offset ) + " : of type\n\t" + str( memberType )
 
@@ -198,6 +207,114 @@ class DIEStruct( IDIEType ):
     @staticmethod
     def _isStaticMember( die ):
         return 'DW_AT_external' in die.attributes
+
+class Object:
+    pass
+
+class DIEConverter:
+    def __init__( self ):
+        self.dies = {}
+
+    def process( self, dwarf_info ):
+        self._make_dies_mapping( dwarf_info )
+
+        self._convert_dwarf_to_objects( dwarf_info )
+
+    def _convert_dwarf_to_objects( self, dwarf_info ):
+        for cu in dwarf_info.iter_CUs():
+            self._convert_CU_to_objects( cu )
+
+    def _convert_CU_to_objects( self, cu ):
+        top_die = cu.get_top_DIE()
+
+        for die in top_die.iter_children():
+            self._convert_die_to_object( die )
+
+    def _is_class( self, die ):
+        return die.tag in ( 'DW_TAG_class_type', 'DW_TAG_structure_type' )
+
+    def _is_static( self, die ):
+        return 'DW_AT_external' in die.attributes
+
+    def _is_member( self, die ):
+        if die.tag != 'DW_TAG_member':
+            return False
+        elif self._is_static( die ):
+            return False
+        else:
+            return True
+
+    def _get_name( self, die ):
+        try:
+            return die.attributes[ 'DW_AT_name' ].value.decode( "utf-8" )
+        except KeyError:
+            return "?unknown?"
+
+    def _convert_die_to_member( self, die ):
+        assert self._is_member( die ), 'die has to be a member'
+
+        print( '\tmember %s found' % self._get_name( die ) )
+
+    def _is_template( self, die ):
+        return self._get_name( die ).count( '<' ) != 0
+
+    def _is_stl( self, die ):
+        return self._get_name( die ).startswith( '_' )
+
+    def _is_local_class( self, die ):
+        # todo
+        return False
+        
+    def _is_base_object( self, die ):
+        return die.tag == 'DW_TAG_inheritance'
+        
+    def _get_type_id( self, die ):
+        return die.attributes[ 'DW_AT_type' ].value
+        
+    def _convert_die_to_base_object( self, die ):
+        assert self._is_base_object( die ), 'die has to be a base object (inheritance)'
+        
+        base_class_type_id = self._get_type_id( die )
+        base_class_type_die = self.dies[ base_class_type_id ]
+        base_class_type_name = self._get_name( base_class_type_die )
+        
+        print( '\tinheritance %s found' % base_class_type_name )
+        
+        
+    def _convert_die_to_class( self, die ):
+        assert self._is_class( die ), 'die has to be a class type'
+
+        print( 'Type %s found' % self._get_name( die ) )
+
+        if self._is_stl( die ):
+            print( '\tSTL skipped' )
+            return None
+
+        if self._is_template( die ):
+            print( '\ttemplate skipped' )
+            return None
+
+        if self._is_local_class( die ):
+            print( '\tlocal class skipped' )
+            return None
+
+        for child in die.iter_children():
+            if self._is_member( child ):
+                self._convert_die_to_member( child )
+            elif self._is_base_object( child ):
+                self._convert_die_to_base_object( child )
+
+    def _convert_die_to_object( self, die ):
+        if self._is_class( die ):
+            self._convert_die_to_class( die )
+
+    def _make_dies_mapping( self, dwarf_info ):
+        for cu in dwarf_info.iter_CUs():
+            top_die = cu.get_top_DIE()
+
+            for die in top_die.iter_children():
+                self.dies[ die.offset ] = die
+
 #
 # TypeFactoryImpl
 #
@@ -214,7 +331,7 @@ class TypeFactoryImpl:
 
         self.TypesFactory[ 'DW_TAG_DIETypedef' ] = TypeFactoryImpl._createDIETypedef
 
-        self.TypesFactory[ 'DW_TAG_structure_type' ] = TypeFactoryImpl._createDIEStruct
+        self.TypesFactory[ 'DW_TAG_structure_type' ] = TypeFactoryImpl._createDIEClass
         self.TypesFactory[ 'DW_TAG_clsss_type' ] = TypeFactoryImpl._createDIEClass
 
     def create( self, dies, die ):
@@ -232,12 +349,8 @@ class TypeFactoryImpl:
         return DIETypedef( dies, die )
 
     @staticmethod
-    def _createDIEStruct( self, dies, die ):
-        return DIEStruct( dies, die )
-
-    @staticmethod
     def _createDIEClass( self, dies, die ):
-        return self._createDIEStruct( dies, die )
+        return DIEClass( dies, die )
 
     @staticmethod
     def _createDIEPtrType( self, dies, die ):
@@ -264,12 +377,33 @@ class TypeFactory:
     def types( self ):
         return self.get().types()
 
+class Var:
+    pass
+
+class Class( Var ):
+    def __init__( self ):
+        pass
+
+class Inheritance( Var ):
+    def __init__( self ):
+        pass
+
+class Member( Var ):
+    def __init__( self ):
+        pass
+
+def isMember( die ):
+    if die.tag() == 'DW_TAG_member':
+        return False
+
 #
 # ClassCompacter
 #
 class ClassCompacter:
     def __init__( self ):
         self.dies = {}
+
+        self.die_converter = DIEConverter()
 
     def processFile( self, filename ):
         with open( fileName, 'rb' ) as file:
@@ -291,16 +425,25 @@ class ClassCompacter:
 
         dwarfInfo = elfFile.get_dwarf_info()
 
+        self.die_converter.process( dwarfInfo )
+
+    def __processDWARF( self, elfFile ):
+        if not elfFile.has_dwarf_info():
+            print( "File %s has no DWARF info" % fileName )
+            return
+
+        dwarfInfo = elfFile.get_dwarf_info()
+
         for cu in dwarfInfo.iter_CUs():
             topDIE = cu.get_top_DIE()
             self._processDIERecursively( topDIE )
 
         for k, v in self.dies.items():
-            #if v.isBasic() == True:
-            #    continue
+            if v.isBasic() == True:
+                continue
 
-            #if v.isTemplate() == True:
-            #    continue
+            if v.isTemplate() == True:
+                continue
 
             #if v.isInternalLibrary():
             #    continue
