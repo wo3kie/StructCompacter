@@ -13,9 +13,9 @@ def printPrettyMap( map ):
 
 
 #
-# IType
+# IDIEType
 #
-class IType:
+class IDIEType:
     def __init__( self, dies, die ):
         self.dies = dies
         self.die = die
@@ -60,9 +60,9 @@ class IType:
     def __str__( self ):
         pass
 
-class InvalidType( IType ):
+class DIEInvalidType( IDIEType ):
     def __init__( self ):
-        IType.__init__( self, None, None )
+        IDIEType.__init__( self, None, None )
 
     def typeId( self ):
         return "?invalid?"
@@ -73,9 +73,9 @@ class InvalidType( IType ):
     def __str__( self ):
         return self.typeId()
 
-class BaseType( IType ):
+class DIEBaseType( IDIEType ):
     def __init__( self, dies, die ):
-        IType.__init__( self, dies, die )
+        IDIEType.__init__( self, dies, die )
 
     def typeId( self ):
         return "base"
@@ -83,9 +83,9 @@ class BaseType( IType ):
     def __str__( self ):
         return self.typeId() + " : " + self.getName()
 
-class PtrType( IType ):
+class DIEPtrType( IDIEType ):
     def __init__( self, dies, die ):
-        IType.__init__( self, dies, die )
+        IDIEType.__init__( self, dies, die )
 
     def typeId( self ):
         return "ptr"
@@ -94,22 +94,22 @@ class PtrType( IType ):
         id = self.getTypeId()
 
         if id == -1:
-            pointedType = InvalidType()
+            pointedType = DIEInvalidType()
         else:
-            pointedType = self.dies.get( id, InvalidType() )
+            pointedType = self.dies.get( id, DIEInvalidType() )
 
         return self.typeId() + " : " + str( id ) + " -> " + pointedType.getName()
 
-class RefType( PtrType ):
+class DIERefType( DIEPtrType ):
     def __init__( self, dies, die ):
-        IType.__init__( self, dies, die )
+        IDIEType.__init__( self, dies, die )
 
     def typeId( self ):
         return "ref"
 
-class ArrayType( IType ):
+class DIEArrayType( IDIEType ):
     def __init__( self, dies, die ):
-        IType.__init__( self, dies, die )
+        IDIEType.__init__( self, dies, die )
 
     def typeId( self ):
         return "array"
@@ -117,29 +117,29 @@ class ArrayType( IType ):
     def __str__( self ):
         return self.typeId() + " : " + str( self.getTypeId() )
 
-class Typedef( IType ):
+class DIETypedef( IDIEType ):
     def __init__( self, dies, die ):
-        IType.__init__( self, dies, die )
+        IDIEType.__init__( self, dies, die )
 
-    def getBaseType( self ):
+    def getDIEBaseType( self ):
         return self.getTypeId()
 
     def typeId( self ):
-        return "typedef"
+        return "DIETypedef"
 
     def __str__( self ):
-        id = self.getBaseType()
+        id = self.getDIEBaseType()
 
         if id == -1:
-            typedefedType = InvalidType()
+            DIETypedefedType = DIEInvalidType()
         else:
-            typedefedType = self.dies.get( id, InvalidType() )
+            DIETypedefedType = self.dies.get( id, DIEInvalidType() )
 
-        return self.typeId() + " : " + self.getName() + " : " + str( id ) + "\n\t" + str( typedefedType )
+        return self.typeId() + " : " + self.getName() + " : " + str( id ) + "\n\t" + str( DIETypedefedType )
 
-class Struct( IType ):
+class DIEStruct( IDIEType ):
     def __init__( self, dies, die ):
-        IType.__init__( self, dies, die )
+        IDIEType.__init__( self, dies, die )
 
         self.members_skip_tags = [
               'DW_TAG_subprogram'
@@ -181,9 +181,9 @@ class Struct( IType ):
                 type = -1
 
             if type == -1:
-                memberType = InvalidType()
+                memberType = DIEInvalidType()
             else:
-                memberType = self.dies.get( type, InvalidType() )
+                memberType = self.dies.get( type, DIEInvalidType() )
 
             try:
                 this_offset = component.attributes[ "DW_AT_data_member_location" ].value[1]
@@ -205,17 +205,17 @@ class TypeFactoryImpl:
     def __init__( self ):
         self.TypesFactory = {}
 
-        self.TypesFactory[ 'DW_TAG_base_type' ] = TypeFactoryImpl._createBaseType
+        self.TypesFactory[ 'DW_TAG_base_type' ] = TypeFactoryImpl._createDIEBaseType
 
-        self.TypesFactory[ 'DW_TAG_pointer_type' ] = TypeFactoryImpl._createPtrType
-        self.TypesFactory[ 'DW_TAG_reference_type' ] = TypeFactoryImpl._createRefType
+        self.TypesFactory[ 'DW_TAG_pointer_type' ] = TypeFactoryImpl._createDIEPtrType
+        self.TypesFactory[ 'DW_TAG_reference_type' ] = TypeFactoryImpl._createDIERefType
 
-        self.TypesFactory[ 'DW_TAG_array_type' ] = TypeFactoryImpl._createArrayType
+        self.TypesFactory[ 'DW_TAG_array_type' ] = TypeFactoryImpl._createDIEArrayType
 
-        self.TypesFactory[ 'DW_TAG_typedef' ] = TypeFactoryImpl._createTypedef
+        self.TypesFactory[ 'DW_TAG_DIETypedef' ] = TypeFactoryImpl._createDIETypedef
 
-        self.TypesFactory[ 'DW_TAG_structure_type' ] = TypeFactoryImpl._createStruct
-        self.TypesFactory[ 'DW_TAG_clsss_type' ] = TypeFactoryImpl._createClass
+        self.TypesFactory[ 'DW_TAG_structure_type' ] = TypeFactoryImpl._createDIEStruct
+        self.TypesFactory[ 'DW_TAG_clsss_type' ] = TypeFactoryImpl._createDIEClass
 
     def create( self, dies, die ):
         return self.TypesFactory[ die.tag ]( self, dies, die )
@@ -224,32 +224,32 @@ class TypeFactoryImpl:
         return self.TypesFactory.keys()
 
     @staticmethod
-    def _createBaseType( self, dies, die ):
-        return BaseType( dies, die )
+    def _createDIEBaseType( self, dies, die ):
+        return DIEBaseType( dies, die )
 
     @staticmethod
-    def _createTypedef( self, dies, die ):
-        return Typedef( dies, die )
+    def _createDIETypedef( self, dies, die ):
+        return DIETypedef( dies, die )
 
     @staticmethod
-    def _createStruct( self, dies, die ):
-        return Struct( dies, die )
+    def _createDIEStruct( self, dies, die ):
+        return DIEStruct( dies, die )
 
     @staticmethod
-    def _createClass( self, dies, die ):
-        return self._createStruct( dies, die )
+    def _createDIEClass( self, dies, die ):
+        return self._createDIEStruct( dies, die )
 
     @staticmethod
-    def _createPtrType( self, dies, die ):
-        return PtrType( dies, die )
+    def _createDIEPtrType( self, dies, die ):
+        return DIEPtrType( dies, die )
 
     @staticmethod
-    def _createRefType( self, dies, die ):
-        return RefType( dies, die )
+    def _createDIERefType( self, dies, die ):
+        return DIERefType( dies, die )
 
     @staticmethod
-    def _createArrayType( self, dies, die ):
-        return ArrayType( dies, die )
+    def _createDIEArrayType( self, dies, die ):
+        return DIEArrayType( dies, die )
 
 class TypeFactory:
     def __init__( self ):
