@@ -26,30 +26,6 @@ class Struct:
             return
 
 class Type:
-    def get_name( self ):
-        pass
-
-    def get_size( self ):
-        pass
-
-class UnknownType( Type ):
-    def get_name( self ):
-        return "unknown"
-
-    def get_size( self ):
-        return -1
-
-class PtrType( Type ):
-    def __init__( self, size = 4 ):
-        self.size = size
-
-    def get_name( self ):
-        return "ptr"
-
-    def get_size( self ):
-        return self.size
-
-class BaseType( Type ):
     def __init__( self, name, size ):
         self.name = name
         self.size = size
@@ -60,6 +36,35 @@ class BaseType( Type ):
     def get_size( self ):
         return self.size
 
+class UnknownType( Type ):
+    def __init__( self ):
+        Type.__init__( self, "unknown", -1 )
+
+class PtrType( Type ):
+    def __init__( self, name, size ):
+        Type.__init__( self, name, size )
+
+    def get_name( self ):
+        return Type.get_name( self ) + '*';
+        
+class BaseType( Type ):
+    def __init__( self, name, size ):
+        Type.__init__( self, name, size )
+
+class UnionType( Type ):
+    def __init__( self, name, size ):
+        Type.__init__( self, name, size )
+
+    def get_name( self ):
+        return '{' + Type.get_name( self ) + '}';
+        
+class ArrayType( Type ):
+    def __init__( self, name ):
+        Type.__init__( self, name, -1 )
+        
+    def get_name( self ):
+        return '[' + Type.get_name( self ) + ']';
+        
 class DIEConverter:
     def __init__( self ):
         self.dies = {}
@@ -150,9 +155,15 @@ class DIEConverter:
             die = self.dies[ type_id ]
 
             if die.tag == 'DW_TAG_pointer_type':
-                return PtrType( self._ptr_size )
+                return PtrType( self._resolve_type( self._get_type_id( die ) ).get_name(), self._ptr_size )
             elif die.tag == 'DW_TAG_base_type':
                 return BaseType( self._get_name( die ), self._get_size( die ) )
+            elif die.tag == 'DW_TAG_typedef':
+                return self._resolve_type( self._get_type_id( die ) )
+            elif die.tag == 'DW_TAG_union_type':
+                return UnionType( self._get_name( die ), self._get_size( die ) )
+            elif die.tag == 'DW_TAG_array_type':
+                return ArrayType( self._resolve_type( self._get_type_id( die ) ).get_name() )
             else:
                 return UnknownType()
         except KeyError:
@@ -167,7 +178,7 @@ class DIEConverter:
         type_id = self._get_type_id( die )
         this_offset = self._get_this_offset( die )
 
-        print( '\t%s of %s at %s:%d [this+%d]' \
+        print( '\t%s of -%s- at %s:%d [this+%d]' \
             % ( \
                 name \
                 , self._decode_type_name( type_id ) \
@@ -203,14 +214,7 @@ class DIEConverter:
 
         print( '\tinheritance %s found' % base_class_type_name )
 
-
-    def _convert_die_to_type( self, die ):
-        assert self._is_class( die ), 'die has to be a class type'
-
-        print( 'Struct %s found' % self._get_name( die ) )
-
-        struct = Struct()
-
+    def _skip_type( self, die ):
         if self._is_stl( die ):
             print( '\tSTL skipped' )
             return None
@@ -222,6 +226,16 @@ class DIEConverter:
         if self._is_local_class( die ):
             print( '\tlocal class skipped' )
             return None
+        
+    def _convert_die_to_type( self, die ):
+        assert self._is_class( die ), 'die has to be a class type'
+
+        print( 'Struct %s found' % self._get_name( die ) )
+
+        struct = Struct()
+
+        #if self._skip_type( die ):
+        #    return None
 
         for child in die.iter_children():
             if self._is_base_object( child ):
