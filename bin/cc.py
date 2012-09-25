@@ -11,6 +11,13 @@ def printPrettyMap( map ):
     for k, v in map.items():
         print( "%d : %s" % ( k, v ) )
 
+def decode( values ):
+    result = 0
+    for value in reversed( values ):
+        result = ( result << 7 ) + ( value & 0x7F )
+
+    return result
+
 class Object:
     pass
 
@@ -46,7 +53,14 @@ class PtrType( Type ):
 
     def get_name( self ):
         return Type.get_name( self ) + '*';
-        
+
+class RefType( PtrType ):
+    def __init__( self, name, size ):
+        PtrType.__init__( self, name, size )
+
+    def get_name( self ):
+        return self.name + '&';
+
 class BaseType( Type ):
     def __init__( self, name, size ):
         Type.__init__( self, name, size )
@@ -57,14 +71,21 @@ class UnionType( Type ):
 
     def get_name( self ):
         return '{' + Type.get_name( self ) + '}';
-        
+
 class ArrayType( Type ):
     def __init__( self, name ):
         Type.__init__( self, name, -1 )
-        
+
     def get_name( self ):
         return '[' + Type.get_name( self ) + ']';
-        
+
+class StructType( Type ):
+    def __init__( self, name, size = 8 ):
+        Type.__init__( self, name, size )
+
+    def get_name( self ):
+        return '{' + Type.get_name( self ) + '}';
+
 class DIEConverter:
     def __init__( self ):
         self.dies = {}
@@ -75,19 +96,19 @@ class DIEConverter:
 
         self._make_dies_mapping( dwarf_info )
 
-        self._convert_dwarf_to_objects( dwarf_info )
+        self._process_dwarf_info( dwarf_info )
 
-    def _convert_dwarf_to_objects( self, dwarf_info ):
+    def _process_dwarf_info( self, dwarf_info ):
         for cu in dwarf_info.iter_CUs():
-            self._convert_CU_to_objects( cu )
+            self._process_cu( cu )
 
-    def _convert_CU_to_objects( self, cu ):
+    def _process_cu( self, cu ):
         top_die = cu.get_top_DIE()
 
         for die in top_die.iter_children():
-            self._convert_die_to_object( die )
+            self._convert_die_to_struct( die )
 
-    def _is_class( self, die ):
+    def _is_struct( self, die ):
         return die.tag in ( 'DW_TAG_class_type', 'DW_TAG_structure_type' )
 
     def _is_static( self, die ):
@@ -105,11 +126,24 @@ class DIEConverter:
         for cu in dwarf_info.iter_CUs():
             return cu[ 'address_size' ]
 
+    def _get_name_impl( self, die ):
+        return die.attributes[ 'DW_AT_name' ].value.decode( 'utf-8' )
+
     def _get_name( self, die ):
         try:
-            return die.attributes[ 'DW_AT_name' ].value.decode( 'utf-8' )
+            return self._get_name_impl( die )
         except KeyError:
-            return '?no type name?'
+            pass
+
+        try:
+            specification_id = die.attributes[ 'DW_AT_specification' ].value
+            specification_die = self.dies[ specification_id ]
+            result = self._get_name( specification_die )
+
+            return result
+
+        except KeyError:
+            return 'anonymous'
 
     def _get_size( self, die ):
         try:
@@ -124,28 +158,30 @@ class DIEConverter:
             return None
 
     def _get_line_number( self, die ):
-        try:
+        if 'DW_AT_decl_line' in die.attributes:
             return die.attributes[ 'DW_AT_decl_line' ].value
-        except KeyError:
+        else:
             return -1
 
     def _get_type_id( self, die ):
-        try:
+        if 'DW_AT_type' in die.attributes:
             return die.attributes[ 'DW_AT_type' ].value
-        except KeyError:
-            return -1
+
+        if 'DW_AT_specification' in die.attributes:
+            specification_id = die.attributes[ 'DW_AT_specification' ].value
+            specification_die = self.dies[ specification_id ]
+            result = self._get_type_id( specification_die )
+
+            return result
+
+        raise Exception( 'Can not get DW_AT_type' )
 
     def _get_this_offset( self, die ):
-        try:
-            return die.attributes[ 'DW_AT_data_member_location' ].value[1]
-        except KeyError:
-            return -1
+        attr = die.attributes[ 'DW_AT_data_member_location' ]
+        return decode( attr.value[1:] )
 
     def _decode_type_name( self, type_id ):
-        try:
-            return self._resolve_type( type_id ).get_name()
-        except KeyError:
-            return 'unknown type_id'
+        return self._resolve_type( type_id ).get_name()
 
     def _decode_file_name( self, file_id ):
         return 'main.cpp'
@@ -156,6 +192,8 @@ class DIEConverter:
 
             if die.tag == 'DW_TAG_pointer_type':
                 return PtrType( self._resolve_type( self._get_type_id( die ) ).get_name(), self._ptr_size )
+            elif die.tag == 'DW_TAG_reference_type':
+                return RefType( self._resolve_type( self._get_type_id( die ) ).get_name(), self._ptr_size )
             elif die.tag == 'DW_TAG_base_type':
                 return BaseType( self._get_name( die ), self._get_size( die ) )
             elif die.tag == 'DW_TAG_typedef':
@@ -164,6 +202,10 @@ class DIEConverter:
                 return UnionType( self._get_name( die ), self._get_size( die ) )
             elif die.tag == 'DW_TAG_array_type':
                 return ArrayType( self._resolve_type( self._get_type_id( die ) ).get_name() )
+            elif die.tag == 'DW_TAG_class_type':
+                return StructType( self._get_name( die ) )
+            elif die.tag == 'DW_TAG_structure_type':
+                return StructType( self._get_name( die ) )
             else:
                 return UnknownType()
         except KeyError:
@@ -172,9 +214,9 @@ class DIEConverter:
     def _convert_die_to_member( self, die ):
         assert self._is_member( die ), 'die has to be a member'
 
+        name = self._get_name( die )
         file_id = self._get_file_id( die );
         line_no = self._get_line_number( die )
-        name = self._get_name( die )
         type_id = self._get_type_id( die )
         this_offset = self._get_this_offset( die )
 
@@ -205,6 +247,9 @@ class DIEConverter:
     def _is_base_object( self, die ):
         return die.tag == 'DW_TAG_inheritance'
 
+    def _is_declaration( self, die ):
+        return 'DW_AT_declaration' in die.attributes
+
     def _convert_die_to_inheritance( self, die ):
         assert self._is_base_object( die ), 'die has to be a base object (inheritance)'
 
@@ -215,46 +260,66 @@ class DIEConverter:
         print( '\tinheritance %s found' % base_class_type_name )
 
     def _skip_type( self, die ):
+        if self._is_declaration( die ):
+            #print( '\tdeclaration skipped' )
+            return True
+
         if self._is_stl( die ):
-            print( '\tSTL skipped' )
-            return None
+            #print( '\tSTL skipped' )
+            return True
 
         if self._is_template( die ):
-            print( '\ttemplate skipped' )
-            return None
+            #print( '\ttemplate skipped' )
+            return True
 
         if self._is_local_class( die ):
-            print( '\tlocal class skipped' )
-            return None
-        
-    def _convert_die_to_type( self, die ):
-        assert self._is_class( die ), 'die has to be a class type'
+            #print( '\tlocal class skipped' )
+            return True
 
-        print( 'Struct %s found' % self._get_name( die ) )
+        if self._get_name( die ) == 'anonymous':
+            #print( '\tno name skipped' )
+            return True
+
+        return False
+
+    def _convert_die_to_struct( self, die ):
+        if self._is_struct( die ) == False:
+            return None
 
         struct = Struct()
 
-        #if self._skip_type( die ):
-        #    return None
+        try:
+            if self._skip_type( die ):
+                return None
 
-        for child in die.iter_children():
-            if self._is_base_object( child ):
-                self._convert_die_to_inheritance( child )
-            elif self._is_member( child ):
-                struct.add_member( self._convert_die_to_member( child ) )
+            print( 'Struct %s found' % self._get_name( die ) )
+
+            for child in die.iter_children():
+                if self._is_base_object( child ):
+                    self._convert_die_to_inheritance( child )
+                elif self._is_member( child ):
+                    struct.add_member( self._convert_die_to_member( child ) )
+        except KeyError:
+            print( '\tAn error occured whilst processing, skipped' )
+            return None
+
+        except Exception:
+            print( '\tAn error occured whilst processing, skipped' )
+            return None
 
         return struct
 
-    def _convert_die_to_object( self, die ):
-        if self._is_class( die ):
-            self._convert_die_to_type( die )
+    def _make_dies_mapping_recursively( self, die ):
+        self.dies[ die.offset ] = die
+
+        for children in die.iter_children():
+            self._make_dies_mapping_recursively( children )
 
     def _make_dies_mapping( self, dwarf_info ):
         for cu in dwarf_info.iter_CUs():
             top_die = cu.get_top_DIE()
 
-            for die in top_die.iter_children():
-                self.dies[ die.offset ] = die
+            self._make_dies_mapping_recursively( top_die )
 
 #
 # ClassCompacter
