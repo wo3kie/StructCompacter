@@ -86,6 +86,20 @@ class StructType( Type ):
     def get_name( self ):
         return '{' + Type.get_name( self ) + '}';
 
+class ConstType( Type ):
+    def __init__( self, name ):
+        Type.__init__( self, name, size = 8 )
+
+    def get_name( self ):
+        return 'c(' + Type.get_name( self ) + ')';
+
+class EnumType( Type ):
+    def __init__( self, name ):
+        Type.__init__( self, name, size = 8 )
+
+    def get_name( self ):
+        return 'e(' + Type.get_name( self ) + ')';
+        
 class DIEConverter:
     def __init__( self ):
         self.dies = {}
@@ -206,6 +220,10 @@ class DIEConverter:
                 return StructType( self._get_name( die ) )
             elif die.tag == 'DW_TAG_structure_type':
                 return StructType( self._get_name( die ) )
+            elif die.tag == 'DW_TAG_const_type':
+                return ConstType( self._resolve_type( self._get_type_id( die ) ).get_name() )
+            elif die.tag == 'DW_TAG_enumeration_type':
+                return EnumType( self._resolve_type( self._get_type_id( die ) ).get_name() )
             else:
                 return UnknownType()
         except KeyError:
