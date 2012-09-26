@@ -22,8 +22,14 @@ class Object:
     pass
 
 class Inheritance:
+    def __init__( self, type, this_offset ):
+        self.type = type
+        self.this_offset = this_offset
+
     def __str__( self ):
-        return 'Inheritance'
+        return 'Inheritance ' \
+            + self.type.get_name() \
+            + ' [this+' + str( self.this_offset ) + ']'
 
 class Member( Object ):
     def __init__( self, name, file_id, line_no, type, this_offset ):
@@ -365,6 +371,15 @@ class DIEConverter:
 
         return Member( name, file_id, line_no, type, this_offset )
 
+    def _convert_die_to_inheritance( self, die ):
+        assert self._is_inheritance( die ), 'die has to be a base object (inheritance)'
+
+        type_id = self._get_type_id( die )
+        type = self._get_or_create_type( type_id )
+        this_offset = self._get_this_offset( die )
+
+        return Inheritance( type, this_offset )
+        
     def _is_template( self, die ):
         return self._get_name( die ).count( '<' ) != 0
 
@@ -380,15 +395,6 @@ class DIEConverter:
 
     def _is_declaration( self, die ):
         return 'DW_AT_declaration' in die.attributes
-
-    def _convert_die_to_inheritance( self, die ):
-        assert self._is_inheritance( die ), 'die has to be a base object (inheritance)'
-
-        base_class_type_id = self._get_type_id( die )
-        base_class_type_die = self.dies[ base_class_type_id ]
-        base_class_type_name = self._get_name( base_class_type_die )
-
-        return None
 
     def _skip_type( self, die ):
         if self._is_declaration( die ):
