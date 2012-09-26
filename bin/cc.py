@@ -43,63 +43,73 @@ class Type:
     def get_size( self ):
         return self.size
 
+    def get_desc( self ):
+        pass
+
 class UnknownType( Type ):
     def __init__( self ):
         Type.__init__( self, "unknown", -1 )
+
+    def get_desc( self ):
+        return self.get_name()
 
 class PtrType( Type ):
     def __init__( self, name, size ):
         Type.__init__( self, name, size )
 
-    def get_name( self ):
-        return Type.get_name( self ) + '*';
+    def get_desc( self ):
+        return self.get_name() + '* (' + str( self.get_size() ) + ')'
 
 class RefType( PtrType ):
     def __init__( self, name, size ):
         PtrType.__init__( self, name, size )
 
-    def get_name( self ):
-        return self.name + '&';
+    def get_desc( self ):
+        return self.get_name() + '& (' + str( self.get_size() ) + ')'
 
 class BaseType( Type ):
     def __init__( self, name, size ):
         Type.__init__( self, name, size )
 
+    def get_desc( self ):
+        return self.get_name() + ' (' + str( self.get_size() ) + ')'
+
 class UnionType( Type ):
     def __init__( self, name, size ):
         Type.__init__( self, name, size )
 
-    def get_name( self ):
-        return '{' + Type.get_name( self ) + '}';
+    def get_desc( self ):
+        return '{' + self.get_name() + '} (' + str( self.get_size() ) + ')'
 
 class ArrayType( Type ):
     def __init__( self, name ):
         Type.__init__( self, name, -1 )
 
-    def get_name( self ):
-        return '[' + Type.get_name( self ) + ']';
+    def get_desc( self ):
+        return '[' + self.get_name() + '] ()'
 
 class StructType( Type ):
-    def __init__( self, name, size = 8 ):
+    def __init__( self, name, size ):
         Type.__init__( self, name, size )
 
-    def get_name( self ):
-        return '{' + Type.get_name( self ) + '}';
+    def get_desc( self ):
+        return '{' + self.get_name() + '} (' + str( self.get_size() ) + ')'
 
 class ConstType( Type ):
     def __init__( self, name ):
-        Type.__init__( self, name, size = 8 )
+        Type.__init__( self, name, size )
 
-    def get_name( self ):
-        return 'c(' + Type.get_name( self ) + ')';
+    def get_desc( self ):
+        return 'const{' + self.get_name() + '} (' + str( self.get_size() ) + ')'
 
 class EnumType( Type ):
     def __init__( self, name ):
-        Type.__init__( self, name, size = 8 )
+        Type.__init__( self, name, size )
 
-    def get_name( self ):
-        return 'e(' + Type.get_name( self ) + ')';
-        
+    def get_desc( self ):
+        return 'enum{' + self.get_name() + '} (' + str( self.get_size() ) + ')'
+
+
 class DIEConverter:
     def __init__( self ):
         self.dies = {}
@@ -163,7 +173,9 @@ class DIEConverter:
         try:
             return die.attributes[ 'DW_AT_size' ].value
         except KeyError:
-            return -1
+            pass
+
+        return die.attributes[ 'DW_AT_byte_size' ].value
 
     def _get_file_id( self, die ):
         try:
@@ -195,7 +207,7 @@ class DIEConverter:
         return decode( attr.value[1:] )
 
     def _decode_type_name( self, type_id ):
-        return self._resolve_type( type_id ).get_name()
+        return self._resolve_type( type_id ).get_desc()
 
     def _decode_file_name( self, file_id ):
         return 'main.cpp'
@@ -217,13 +229,13 @@ class DIEConverter:
             elif die.tag == 'DW_TAG_array_type':
                 return ArrayType( self._resolve_type( self._get_type_id( die ) ).get_name() )
             elif die.tag == 'DW_TAG_class_type':
-                return StructType( self._get_name( die ) )
+                return StructType( self._get_name( die ), self._get_size( die ) )
             elif die.tag == 'DW_TAG_structure_type':
-                return StructType( self._get_name( die ) )
+                return StructType( self._get_name( die ), self._get_size( die ) )
             elif die.tag == 'DW_TAG_const_type':
-                return ConstType( self._resolve_type( self._get_type_id( die ) ).get_name() )
+                return self._resolve_type( self._get_type_id( die ) )
             elif die.tag == 'DW_TAG_enumeration_type':
-                return EnumType( self._resolve_type( self._get_type_id( die ) ).get_name() )
+                return EnumType( self._get_name( die ), self._get_size( die ) )
             else:
                 return UnknownType()
         except KeyError:
@@ -317,12 +329,12 @@ class DIEConverter:
                     self._convert_die_to_inheritance( child )
                 elif self._is_member( child ):
                     struct.add_member( self._convert_die_to_member( child ) )
-        except KeyError:
-            print( '\tAn error occured whilst processing, skipped' )
+        except KeyError as error:
+            print( '\tError:', error, '- skipped' )
             return None
 
-        except Exception:
-            print( '\tAn error occured whilst processing, skipped' )
+        except Exception as error:
+            print( '\tError:', error, '- skipped' )
             return None
 
         return struct
