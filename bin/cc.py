@@ -18,6 +18,12 @@ def decode( values ):
 
     return result
 
+def abbrev( text, length ):
+    if len( text ) <= length:
+        return text
+    
+    return text[0:length] + '...'
+    
 class Object:
     pass
 
@@ -28,8 +34,11 @@ class Inheritance:
 
     def __str__( self ):
         return 'Inheritance ' \
-            + self.type.get_name() \
+            + abbrev( self.type.get_name(), 50 ) \
             + ' [this+' + str( self.this_offset ) + ']'
+
+    def is_moveable( self ):
+        return False
 
 class Member( Object ):
     def __init__( self, name, file_id, line_no, type, this_offset ):
@@ -41,10 +50,16 @@ class Member( Object ):
 
     def __str__( self ):
         return \
-            self.name \
+            abbrev( self.name, 30 ) \
             + ' (' + str( self.file_id ) + ':' + str( self.line_no ) + ') ' \
-            + self.type.get_name() \
+            + abbrev( self.type.get_name(), 50 ) \
             + ' [this+' + str( self.this_offset ) + ']'
+
+    def is_moveable( self ):
+        if self.name.startswith( '_vptr' ):
+            return False
+
+        return True
 
 class Type:
     def get_name( self ):
@@ -161,7 +176,7 @@ class StructType( Type ):
         return self.size
 
     def get_desc( self ):
-        result = self.get_name() + ' (' + str( self.get_size() ) + ')'
+        result = abbrev( self.get_name(), 50 ) + ' (' + str( self.get_size() ) + ')'
 
         for comp in self.components:
             result += '\n\t' + str( comp )
@@ -281,7 +296,7 @@ class DIEConverter:
             return die.attributes[ 'DW_AT_byte_size' ].value
         except KeyError:
             pass
-            
+
         raise KeyError( 'No DW_AT_(byte_)size for %x' % die.offset )
 
     def _get_file_id( self, die ):
@@ -379,7 +394,7 @@ class DIEConverter:
         this_offset = self._get_this_offset( die )
 
         return Inheritance( type, this_offset )
-        
+
     def _is_template( self, die ):
         return self._get_name( die ).count( '<' ) != 0
 
