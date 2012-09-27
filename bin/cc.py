@@ -44,7 +44,7 @@ class Inheritance( Object ):
 
     def __str__( self ):
         return 'Inheritance ' \
-            + abbrev( self.type.get_name(), 50 ) \
+            + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
 
     def is_moveable( self ):
@@ -62,7 +62,7 @@ class Member( Object ):
         return \
             abbrev( self.name, 30 ) \
             + ' (' + str( self.file_id ) + ':' + str( self.line_no ) + ') ' \
-            + abbrev( self.type.get_name(), 50 ) \
+            + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
 
     def is_moveable( self ):
@@ -73,23 +73,32 @@ class Member( Object ):
 
 class Type:
     def get_name( self ):
+        return self._decorate_name( abbrev( self._get_name(), 30 ) )
+
+    def get_brief_desc( self ):
+        return '[' + self.get_name() + ' (' + str( self.get_size() ) + ')]'
+        
+    def get_full_desc( self ):
+        return self.get_brief_desc()
+        
+    def _get_name( self ):
         pass
 
+    def _decorate_name( self, name ):
+        pass
+        
     def get_size( self ):
-        pass
-
-    def get_desc( self ):
         pass
 
 class UnknownType( Type ):
-    def get_name( self ):
+    def _get_name( self ):
         return "unknown"
 
+    def _decorate_name( self, name ):
+        return name
+        
     def get_size( self ):
         return -1
-
-    def get_desc( self ):
-        return self.get_name()
 
     def calculate_padding( self ):
         pass
@@ -97,22 +106,23 @@ class UnknownType( Type ):
 class PtrType( Type ):
     _size = None
 
+    @staticmethod
     def set_size( size ):
         PtrType._size = size
 
     def __init__( self, type ):
         self.type = type
 
-    def get_name( self ):
-        return self.type.get_name() + '*'
+    def _get_name( self ):
+        return self.type.get_name()
+
+    def _decorate_name( self, name ):
+        return name + '*'
 
     def get_size( self ):
         assert PtrType._size != None, 'Ptr size is not set'
 
         return PtrType._size
-
-    def get_desc( self ):
-        return self.get_name() + ' (' + str( self.get_size() ) + ')'
 
     def calculate_padding( self ):
         pass
@@ -126,16 +136,16 @@ class RefType( Type ):
     def __init__( self, type ):
         self.type = type
 
-    def get_name( self ):
-        return self.type.get_name() + '&'
+    def _get_name( self ):
+        return self.type.get_name()
 
+    def _decorate_name( self, name ):
+        return name + '&'
+        
     def get_size( self ):
         assert RefType._size != None, 'Ref size is not set'
 
         return RefType._size
-
-    def get_desc( self ):
-        return self.get_name() + ' (' + str( self.get_size() ) + ')'
 
     def calculate_padding( self ):
         pass
@@ -145,14 +155,14 @@ class BaseType( Type ):
         self.name = name
         self.size = size
 
-    def get_name( self ):
+    def _get_name( self ):
         return self.name
 
+    def _decorate_name( self, name ):
+        return name
+        
     def get_size( self ):
         return self.size
-
-    def get_desc( self ):
-        return self.get_name() + ' (' + str( self.get_size() ) + ')'
 
     def calculate_padding( self ):
         pass
@@ -162,30 +172,40 @@ class UnionType( Type ):
         self.name = name
         self.size = size
 
-    def get_name( self ):
-        return '{' + self.name + '}'
+    def _get_name( self ):
+        return self.name
+
+    def _decorate_name( self, name ):
+        return '{' + name + '}'
 
     def get_size( self ):
         return self.size
 
-    def get_desc( self ):
-        return self.get_name() + ' (' + str( self.get_size() ) + ')'
-
     def calculate_padding( self ):
         pass
 
+class ArraySizeNotKnown( Exception ):
+    def __str__( self ):
+        return 'size for the ArrayType is not known'
+        
 class ArrayType( Type ):
     def __init__( self, type ):
         self.type = type
 
-    def get_name( self ):
-        return '[' + self.type.get_name() + ']'
-
+    def get_brief_desc( self ):
+        return '[' + self.get_name() + ' (?)]'
+        
+    def _get_name( self ):
+        return self.type.get_name()
+    
+    def _decorate_name( self, name ):
+        return '[' + name + ']'
+        
     def get_size( self ):
-        return -1
-
-    def get_desc( self ):
-        return self.get_name() + ' ()'
+        # no such information in DWARF
+        # type is known
+        # number of items in array is not known
+        raise ArraySizeNotKnown()
 
     def calculate_padding( self ):
         pass
@@ -197,13 +217,16 @@ class StructType( Type ):
 
         self.components = []
 
-    def get_name( self ):
-        return '{' + self.name + '}'
-
+    def _get_name( self ):
+        return self.name
+    
+    def _decorate_name( self, name ):
+        return '{' + name + '}'
+        
     def get_size( self ):
         return self.size
 
-    def get_desc( self ):
+    def get_full_desc( self ):
         result = abbrev( self.get_name(), 50 ) + ' (' + str( self.get_size() ) + ')'
 
         for comp in self.components:
@@ -231,16 +254,20 @@ class StructType( Type ):
         components.append( self.components[0] )
 
         for i in range( 1, len( self.components ) ):
-            previous = self.components[ i - 1 ]
-            current = self.components[ i ]
+            try:
+                previous = self.components[ i - 1 ]
+                current = self.components[ i ]
 
-            current_begin = current.get_this_offset()
-            previous_end = previous.get_this_offset() + previous.get_size()
-            
-            if current_begin > previous_end:
-                padding = Padding( current_begin - previous_end )
-                member = Member( 'padding', -1, -1, padding, previous_end )
-                components.append( member )
+                current_begin = current.get_this_offset()
+                previous_end = previous.get_this_offset() + previous.get_size()
+                
+                if current_begin > previous_end:
+                    padding = Padding( current_begin - previous_end )
+                    member = Member( 'padding', -1, -1, padding, previous_end )
+                    components.append( member )
+
+            except ArraySizeNotKnown:
+                pass
 
             components.append( current )
 
@@ -257,14 +284,14 @@ class EnumType( Type ):
         self.name = name
         self.size = size
 
-    def get_name( self ):
+    def _get_name( self ):
         return self.name
 
+    def _decorate_name( self, name ):
+        return 'enum{' + name + '}'
+        
     def get_size( self ):
         return self.size
-
-    def get_desc( self ):
-        return 'enum{' + self.get_name() + '} (' + str( self.get_size() ) + ')'
 
     def calculate_padding( self ):
         pass
@@ -273,14 +300,14 @@ class Padding( Type ):
     def __init__( self, size ):
         self.size = size
 
-    def get_name( self ):
-        return 'Padding' + ' (' + str( self.get_size() ) + ')'
+    def _get_name( self ):
+        return 'Padding'
 
+    def _decorate_name( self, name ):
+        return '{' + name + '}'
+        
     def get_size( self ):
         return self.size
-
-    def get_desc( self ):
-        return self.get_name()
 
     def calculate_padding( self ):
         pass
@@ -398,7 +425,7 @@ class DIEConverter:
         return decode( attr.value[1:] )
 
     def _decode_type_name( self, type_id ):
-        return self._resolve_type( type_id ).get_desc()
+        return self._resolve_type( type_id ).get_brief_desc()
 
     def _decode_file_name( self, file_id ):
         return 'main.cpp'
@@ -578,7 +605,7 @@ class ClassCompacter:
             type.calculate_padding()
 
         for k,v in types.items():
-            print( v.get_desc() )
+            print( v.get_full_desc() )
 
 def main():
     for fileName in sys.argv[1:]:
