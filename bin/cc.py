@@ -21,16 +21,26 @@ def decode( values ):
 def abbrev( text, length ):
     if len( text ) <= length:
         return text
-    
-    return text[0:length] + '...'
-    
-class Object:
-    pass
 
-class Inheritance:
+    return text[0:length] + '...'
+
+class Object:
     def __init__( self, type, this_offset ):
         self.type = type
         self.this_offset = this_offset
+
+    def get_type( self ):
+        return self.type
+
+    def get_this_offset( self ):
+        return self.this_offset
+
+    def get_size( self ):
+        return self.type.get_size()
+
+class Inheritance( Object ):
+    def __init__( self, type, this_offset ):
+        Object.__init__( self, type, this_offset )
 
     def __str__( self ):
         return 'Inheritance ' \
@@ -42,11 +52,11 @@ class Inheritance:
 
 class Member( Object ):
     def __init__( self, name, file_id, line_no, type, this_offset ):
+        Object.__init__( self, type, this_offset )
+
         self.name = name
         self.file_id = file_id
         self.line_no = line_no
-        self.type = type
-        self.this_offset = this_offset
 
     def __str__( self ):
         return \
@@ -81,6 +91,9 @@ class UnknownType( Type ):
     def get_desc( self ):
         return self.get_name()
 
+    def calculate_padding( self ):
+        pass
+
 class PtrType( Type ):
     _size = None
 
@@ -100,6 +113,9 @@ class PtrType( Type ):
 
     def get_desc( self ):
         return self.get_name() + ' (' + str( self.get_size() ) + ')'
+
+    def calculate_padding( self ):
+        pass
 
 class RefType( Type ):
     _size = None
@@ -121,6 +137,9 @@ class RefType( Type ):
     def get_desc( self ):
         return self.get_name() + ' (' + str( self.get_size() ) + ')'
 
+    def calculate_padding( self ):
+        pass
+
 class BaseType( Type ):
     def __init__( self, name, size ):
         self.name = name
@@ -134,6 +153,9 @@ class BaseType( Type ):
 
     def get_desc( self ):
         return self.get_name() + ' (' + str( self.get_size() ) + ')'
+
+    def calculate_padding( self ):
+        pass
 
 class UnionType( Type ):
     def __init__( self, name, size ):
@@ -149,6 +171,9 @@ class UnionType( Type ):
     def get_desc( self ):
         return self.get_name() + ' (' + str( self.get_size() ) + ')'
 
+    def calculate_padding( self ):
+        pass
+
 class ArrayType( Type ):
     def __init__( self, type ):
         self.type = type
@@ -161,6 +186,9 @@ class ArrayType( Type ):
 
     def get_desc( self ):
         return self.get_name() + ' ()'
+
+    def calculate_padding( self ):
+        pass
 
 class StructType( Type ):
     def __init__( self, name, size ):
@@ -195,6 +223,29 @@ class StructType( Type ):
 
         self.components.append( inheritance )
 
+    def calculate_padding( self ):
+        if len( self.components ) <= 1:
+            return
+
+        components = []
+        components.append( self.components[0] )
+
+        for i in range( 1, len( self.components ) ):
+            previous = self.components[ i - 1 ]
+            current = self.components[ i ]
+
+            current_begin = current.get_this_offset()
+            previous_end = previous.get_this_offset() + previous.get_size()
+            
+            if current_begin > previous_end:
+                padding = Padding( current_begin - previous_end )
+                member = Member( 'padding', -1, -1, padding, previous_end )
+                components.append( member )
+
+            components.append( current )
+
+        self.components = components
+
 class ConstType( Type ):
     pass
 
@@ -215,7 +266,25 @@ class EnumType( Type ):
     def get_desc( self ):
         return 'enum{' + self.get_name() + '} (' + str( self.get_size() ) + ')'
 
+    def calculate_padding( self ):
+        pass
 
+class Padding( Type ):
+    def __init__( self, size ):
+        self.size = size
+
+    def get_name( self ):
+        return 'Padding' + ' (' + str( self.get_size() ) + ')'
+
+    def get_size( self ):
+        return self.size
+
+    def get_desc( self ):
+        return self.get_name()
+
+    def calculate_padding( self ):
+        pass
+        
 class DIEConverter:
     def __init__( self ):
         self.dies = {}
@@ -231,6 +300,9 @@ class DIEConverter:
 
         self._process_dwarf_info( dwarf_info )
 
+    def get_types( self ):
+        return self.types
+
     def _process_dwarf_info( self, dwarf_info ):
         for cu in dwarf_info.iter_CUs():
             self._process_cu( cu )
@@ -245,9 +317,6 @@ class DIEConverter:
                 continue
 
             self.types[ die.offset ] = struct
-
-        for k, v in self.types.items():
-            print( v.get_desc() )
 
     def _is_struct( self, die ):
         return die.tag in ( 'DW_TAG_class_type', 'DW_TAG_structure_type' )
@@ -297,13 +366,13 @@ class DIEConverter:
         except KeyError:
             pass
 
-        raise KeyError( 'No DW_AT_(byte_)size for %x' % die.offset )
+        raise KeyError( 'No DW_AT_(byte_)size for 0x%x' % die.offset )
 
     def _get_file_id( self, die ):
         try:
             return die.attributes[ 'DW_AT_decl_file' ].value
         except KeyError:
-            return None
+            return -1
 
     def _get_line_number( self, die ):
         if 'DW_AT_decl_line' in die.attributes:
@@ -322,7 +391,7 @@ class DIEConverter:
 
             return result
 
-        raise Exception( 'Can not get DW_AT_type for %x' % die.offset )
+        raise Exception( 'Can not get DW_AT_type for 0x%x' % die.offset )
 
     def _get_this_offset( self, die ):
         attr = die.attributes[ 'DW_AT_data_member_location' ]
@@ -503,6 +572,13 @@ class ClassCompacter:
 
         dwarfInfo = elfFile.get_dwarf_info()
         self.die_converter.process( dwarfInfo )
+        types = self.die_converter.get_types()
+
+        for id, type in types.items():
+            type.calculate_padding()
+
+        for k,v in types.items():
+            print( v.get_desc() )
 
 def main():
     for fileName in sys.argv[1:]:
