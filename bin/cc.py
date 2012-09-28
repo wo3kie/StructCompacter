@@ -2,11 +2,20 @@
 
 import sys
 
-sys.path.append( '..\\3rdParty\\pyelftools-0.20' );
+if sys.platform.startswith( 'win' ):
+    sys.path.append( '..\\3rdParty\\pyelftools-0.20' )
+elif sys.platform.startswith( 'linux' ):
+    sys.path.append( '../3rdParty/pyelftools-0.20' )
+else:
+    exit( 'Apple?' )
+
 from elftools.elf.elffile import ELFFile
 from elftools.common.exceptions import ELFError
 from elftools.common.py3compat import bytes2str
 
+#
+# Utils
+#
 def print_map_pretty( map ):
     for k, v in map.items():
         print( "%d : %s" % ( k, v ) )
@@ -24,6 +33,9 @@ def abbrev( text, length ):
 
     return text[0:length] + '...'
 
+#
+# Struct members representation
+#
 class Object:
     def __init__( self, type, this_offset ):
         self.type = type
@@ -71,9 +83,15 @@ class Member( Object ):
 
         return True
 
+#
+# Types representation
+#
 class Type:
     def get_name( self ):
         return self._decorate_name( abbrev( self._get_name(), 30 ) )
+
+    def get_size( self ):
+        pass
 
     def get_brief_desc( self ):
         return '[' + self.get_name() + ' (' + str( self.get_size() ) + ')]'
@@ -81,37 +99,42 @@ class Type:
     def get_full_desc( self ):
         return self.get_brief_desc()
 
+    # details
+
     def _get_name( self ):
         pass
-
-    def _decorate_name( self, name ):
-        pass
-
-    def get_size( self ):
-        pass
-
-class UnknownType( Type ):
-    def _get_name( self ):
-        return "unknown"
 
     def _decorate_name( self, name ):
         return name
 
+class UnknownType( Type ):
     def get_size( self ):
-        return -1
+        return None
 
-    def calculate_padding( self ):
-        pass
+    # details
+
+    def _get_name( self ):
+        return "unknown"
 
 class PtrType( Type ):
+    # static
     _size = None
 
     @staticmethod
     def set_size( size ):
         PtrType._size = size
 
+    # interface
+
     def __init__( self, type ):
         self.type = type
+
+    def get_size( self ):
+        assert PtrType._size != None, 'PtrType::size is not set'
+
+        return PtrType._size
+
+    # details
 
     def _get_name( self ):
         return self.type.get_name()
@@ -119,22 +142,25 @@ class PtrType( Type ):
     def _decorate_name( self, name ):
         return name + '*'
 
-    def get_size( self ):
-        assert PtrType._size != None, 'Ptr size is not set'
-
-        return PtrType._size
-
-    def calculate_padding( self ):
-        pass
-
 class RefType( Type ):
+    # static
     _size = None
 
+    @staticmethod
     def set_size( size ):
         RefType._size = size
 
+    # interface
+
     def __init__( self, type ):
         self.type = type
+
+    def get_size( self ):
+        assert RefType._size != None, 'RefType::size is not set'
+
+        return RefType._size
+
+    # details
 
     def _get_name( self ):
         return self.type.get_name()
@@ -142,35 +168,25 @@ class RefType( Type ):
     def _decorate_name( self, name ):
         return name + '&'
 
-    def get_size( self ):
-        assert RefType._size != None, 'Ref size is not set'
-
-        return RefType._size
-
-    def calculate_padding( self ):
-        pass
-
 class BaseType( Type ):
     def __init__( self, name, size ):
         self.name = name
         self.size = size
 
+    # details
+
     def _get_name( self ):
         return self.name
 
-    def _decorate_name( self, name ):
-        return name
-
     def get_size( self ):
         return self.size
-
-    def calculate_padding( self ):
-        pass
 
 class UnionType( Type ):
     def __init__( self, name, size ):
         self.name = name
         self.size = size
+
+    # details
 
     def _get_name( self ):
         return self.name
@@ -181,9 +197,6 @@ class UnionType( Type ):
     def get_size( self ):
         return self.size
 
-    def calculate_padding( self ):
-        pass
-
 class ArrayType( Type ):
     def __init__( self, type ):
         self.type = type
@@ -191,31 +204,24 @@ class ArrayType( Type ):
     def get_brief_desc( self ):
         return '[' + self.get_name() + ' (?)]'
 
-    def _get_name( self ):
-        return self.type.get_name()
-
-    def _decorate_name( self, name ):
-        return '[' + name + ']'
-
     def get_size( self ):
         # no such information in DWARF
         # type is known
         # number of items in array is not known
         raise None
 
-    def calculate_padding( self ):
-        pass
+    # details
+
+    def _get_name( self ):
+        return self.type.get_name()
+
+    def _decorate_name( self, name ):
+        return '[' + name + ']'
 
 class DeclarationType( Type ):
     def __init__( self, name ):
         self.name = name
         self.size = None
-
-    def _get_name( self ):
-        return self.name
-
-    def _decorate_name( self, name ):
-        return 'decl{' + name + '}'
 
     def get_brief_desc( self ):
         return '[' + self.get_name() + ' (?)]'
@@ -227,10 +233,16 @@ class DeclarationType( Type ):
         # in DWARF there is only declaration of the type
         # size is calculated later on and set explicitly
         assert self.size != None, 'DeclarationType::size is not set'
+
         return self.size
 
-    def calculate_padding( self ):
-        pass
+    # details
+
+    def _get_name( self ):
+        return self.name
+
+    def _decorate_name( self, name ):
+        return 'decl{' + name + '}'
 
 class StructType( Type ):
     def __init__( self, name, size ):
@@ -238,12 +250,6 @@ class StructType( Type ):
         self.size = size
 
         self.components = []
-
-    def _get_name( self ):
-        return self.name
-
-    def _decorate_name( self, name ):
-        return '{' + name + '}'
 
     def get_size( self ):
         return self.size
@@ -262,49 +268,20 @@ class StructType( Type ):
 
         self.components.append( member )
 
-    def add_inheritance( self, inheritance ):
-        if inheritance == None:
-            return
+    # details
 
-        self.components.append( inheritance )
+    def _get_name( self ):
+        return self.name
 
-    def calculate_padding( self ):
-        if len( self.components ) <= 1:
-            return
-
-        components = []
-        components.append( self.components[0] )
-
-        for i in range( 1, len( self.components ) ):
-            try:
-                previous = self.components[ i - 1 ]
-                current = self.components[ i ]
-
-                current_begin = current.get_this_offset()
-                previous_end = previous.get_this_offset() + previous.get_size()
-
-                if current_begin > previous_end:
-                    padding = Padding( current_begin - previous_end )
-                    member = Member( 'padding', -1, -1, padding, previous_end )
-                    components.append( member )
-
-            except Exception:
-                pass
-
-            components.append( current )
-
-        self.components = components
-
-class ConstType( Type ):
-    pass
-
-class VolatileType( Type ):
-    pass
+    def _decorate_name( self, name ):
+        return '{' + name + '}'
 
 class EnumType( Type ):
     def __init__( self, name, size ):
         self.name = name
         self.size = size
+
+    # details
 
     def _get_name( self ):
         return self.name
@@ -312,15 +289,11 @@ class EnumType( Type ):
     def _decorate_name( self, name ):
         return 'enum{' + name + '}'
 
-    def get_size( self ):
-        return self.size
-
-    def calculate_padding( self ):
-        pass
-
-class Padding( Type ):
+class PaddingType( Type ):
     def __init__( self, size ):
         self.size = size
+
+    # details
 
     def _get_name( self ):
         return 'Padding'
@@ -328,12 +301,134 @@ class Padding( Type ):
     def _decorate_name( self, name ):
         return '{' + name + '}'
 
-    def get_size( self ):
-        return self.size
+#
+# Utils for DIE
+#
+class DIE:
+    @staticmethod
+    def is_struct( die ):
+        return die.tag in ( 'DW_TAG_class_type', 'DW_TAG_structure_type' )
 
-    def calculate_padding( self ):
-        pass
+    @staticmethod
+    def is_static( die ):
+        return 'DW_AT_external' in die.attributes
 
+    @staticmethod
+    def is_member( die ):
+        if die.tag != 'DW_TAG_member':
+            return False
+        elif DIE.is_static( die ):
+            return False
+        else:
+            return True
+
+    @staticmethod
+    def get_name( die, dies ):
+        try:
+            return DIE._get_name_impl( die )
+        except KeyError:
+            pass
+
+        try:
+            return DIE._get_name_from_specification( die, dies )
+        except KeyError:
+            pass
+
+        return 'anonymous'
+
+    @staticmethod
+    def get_size( die ):
+        try:
+            return die.attributes[ 'DW_AT_size' ].value
+        except KeyError:
+            pass
+
+        try:
+            return die.attributes[ 'DW_AT_byte_size' ].value
+        except KeyError:
+            pass
+
+        return None
+
+    @staticmethod
+    def get_file_id( die ):
+        try:
+            return die.attributes[ 'DW_AT_decl_file' ].value
+        except KeyError:
+            return -1
+
+    @staticmethod
+    def get_line_number( die ):
+        if 'DW_AT_decl_line' in die.attributes:
+            return die.attributes[ 'DW_AT_decl_line' ].value
+        else:
+            return -1
+
+    @staticmethod
+    def get_type_id( die, dies ):
+        try:
+            return die.attributes[ 'DW_AT_type' ].value
+        except KeyError:
+            pass
+
+        try:
+            DIE._get_type_id_from_specification( die, dies )
+        except KeyError:
+            pass
+
+        return None
+
+    @staticmethod
+    def get_this_offset( die ):
+        attr = die.attributes[ 'DW_AT_data_member_location' ]
+        return decode( attr.value[1:] )
+
+    @staticmethod
+    def is_template( die, dies ):
+        return DIE.get_name( die, dies ).count( '<' ) != 0
+
+    @staticmethod
+    def is_stl( die, dies ):
+        return DIE.get_name( die, dies ).startswith( '_' )
+
+    @staticmethod
+    def is_local_class( die ):
+        # todo
+        return False
+
+    @staticmethod
+    def is_inheritance( die ):
+        return die.tag == 'DW_TAG_inheritance'
+
+    @staticmethod
+    def is_declaration( die ):
+        return 'DW_AT_declaration' in die.attributes
+
+    # details
+
+    @staticmethod
+    def _get_name_impl( die ):
+        return die.attributes[ 'DW_AT_name' ].value.decode( 'utf-8' )
+
+    @staticmethod
+    def _get_name_from_specification( die, dies ):
+        specification_id = die.attributes[ 'DW_AT_specification' ].value
+        specification_die = dies[ specification_id ]
+        result = DIE.get_name( specification_die, dies )
+
+        return result
+
+    @staticmethod
+    def _get_type_id_from_specification( die, dies ):
+        specification_id = die.attributes[ 'DW_AT_specification' ].value
+        specification_die = dies[ specification_id ]
+        result = DIE.get_type_id( specification_die )
+
+        return result
+
+#
+# DIEConverter from DWARF/DIEs into abstract representation of types
+#
 class DIEConverter:
     def __init__( self ):
         self.dies = {}
@@ -352,6 +447,8 @@ class DIEConverter:
     def get_types( self ):
         return self.types
 
+    # details
+
     def _process_dwarf_info( self, dwarf_info ):
         for cu in dwarf_info.iter_CUs():
             self._process_cu( cu )
@@ -367,84 +464,9 @@ class DIEConverter:
 
             self.types[ die.offset ] = struct
 
-    def _is_struct( self, die ):
-        return die.tag in ( 'DW_TAG_class_type', 'DW_TAG_structure_type' )
-
-    def _is_static( self, die ):
-        return 'DW_AT_external' in die.attributes
-
-    def _is_member( self, die ):
-        if die.tag != 'DW_TAG_member':
-            return False
-        elif self._is_static( die ):
-            return False
-        else:
-            return True
-
     def _get_ptr_size( self, dwarf_info ):
         for cu in dwarf_info.iter_CUs():
             return cu[ 'address_size' ]
-
-    def _get_name_impl( self, die ):
-        return die.attributes[ 'DW_AT_name' ].value.decode( 'utf-8' )
-
-    def _get_name( self, die ):
-        try:
-            return self._get_name_impl( die )
-        except KeyError:
-            pass
-
-        try:
-            specification_id = die.attributes[ 'DW_AT_specification' ].value
-            specification_die = self.dies[ specification_id ]
-            result = self._get_name( specification_die )
-
-            return result
-
-        except KeyError:
-            return 'anonymous'
-
-    def _get_size( self, die ):
-        try:
-            return die.attributes[ 'DW_AT_size' ].value
-        except KeyError:
-            pass
-
-        try:
-            return die.attributes[ 'DW_AT_byte_size' ].value
-        except KeyError:
-            pass
-
-        return None
-
-    def _get_file_id( self, die ):
-        try:
-            return die.attributes[ 'DW_AT_decl_file' ].value
-        except KeyError:
-            return -1
-
-    def _get_line_number( self, die ):
-        if 'DW_AT_decl_line' in die.attributes:
-            return die.attributes[ 'DW_AT_decl_line' ].value
-        else:
-            return -1
-
-    def _get_type_id( self, die ):
-        if 'DW_AT_type' in die.attributes:
-            return die.attributes[ 'DW_AT_type' ].value
-
-        if 'DW_AT_specification' in die.attributes:
-            specification_id = die.attributes[ 'DW_AT_specification' ].value
-            specification_die = self.dies[ specification_id ]
-            result = self._get_type_id( specification_die )
-
-            return result
-
-        raise Exception( 'Can not get DW_AT_type for 0x%x' % die.offset )
-
-    def _get_this_offset( self, die ):
-        attr = die.attributes[ 'DW_AT_data_member_location' ]
-        return decode( attr.value[1:] )
 
     def _decode_type_name( self, type_id ):
         return self._resolve_type( type_id ).get_brief_desc()
@@ -457,35 +479,37 @@ class DIEConverter:
 
         # process types not dependent on 'DW_AT_size'
         if die.tag == 'DW_TAG_pointer_type':
-            return PtrType( self._resolve_type( self._get_type_id( die ) ) )
+            return PtrType( self._resolve_type( DIE.get_type_id( die, self.dies ) ) )
         elif die.tag == 'DW_TAG_reference_type':
-            return RefType( self._resolve_type( self._get_type_id( die ) ) )
+            return RefType( self._resolve_type( DIE.get_type_id( die, self.dies ) ) )
         elif die.tag == 'DW_TAG_typedef':
-            return self._resolve_type( self._get_type_id( die ) )
+            return self._resolve_type( DIE.get_type_id( die, self.dies ) )
         elif die.tag == 'DW_TAG_const_type':
-            return self._resolve_type( self._get_type_id( die ) )
+            return self._resolve_type( DIE.get_type_id( die, self.dies ) )
         elif die.tag == 'DW_TAG_volatile_type':
-            return self._resolve_type( self._get_type_id( die ) )
+            return self._resolve_type( DIE.get_type_id( die, self.dies ) )
         elif die.tag == 'DW_TAG_array_type':
-            return ArrayType( self._resolve_type( self._get_type_id( die ) ) )
+            return ArrayType( self._resolve_type( DIE.get_type_id( die, self.dies ) ) )
 
         # process types with missing 'DW_AT_size'
-        size = self._get_size( die )
+        size = DIE.get_size( die )
 
         if size == None:
-            return DeclarationType( self._get_name( die ) )
-        
+            return DeclarationType( DIE.get_name( die, self.dies ) )
+
         # process types with 'DW_AT_size'
+        name = DIE.get_name( die, self.dies )
+
         if die.tag == 'DW_TAG_base_type':
-            return BaseType( self._get_name( die ), size )
+            return BaseType( name, size )
         elif die.tag == 'DW_TAG_union_type':
-            return UnionType( self._get_name( die ), size )
+            return UnionType( name, size )
         elif die.tag == 'DW_TAG_class_type':
-            return StructType( self._get_name( die ), size )
+            return StructType( name, size )
         elif die.tag == 'DW_TAG_structure_type':
-            return StructType( self._get_name( die ), size )
+            return StructType( name, size )
         elif die.tag == 'DW_TAG_enumeration_type':
-            return EnumType( self._get_name( die ), size )
+            return EnumType( name, size )
 
         return UnknownType()
 
@@ -502,81 +526,61 @@ class DIEConverter:
         return type
 
     def _convert_die_to_member( self, die ):
-        assert self._is_member( die ), 'die has to be a member'
+        assert DIE.is_member( die ), 'die has to be a member'
 
-        name = self._get_name( die )
-        file_id = self._get_file_id( die );
-        line_no = self._get_line_number( die )
-        type_id = self._get_type_id( die )
+        name = DIE.get_name( die, self.dies )
+        file_id = DIE.get_file_id( die );
+        line_no = DIE.get_line_number( die )
+        type_id = DIE.get_type_id( die, self.dies )
         type = self._get_or_create_type( type_id )
-        this_offset = self._get_this_offset( die )
+        this_offset = DIE.get_this_offset( die )
 
         return Member( name, file_id, line_no, type, this_offset )
 
     def _convert_die_to_inheritance( self, die ):
-        assert self._is_inheritance( die ), 'die has to be a base object (inheritance)'
+        assert DIE.is_inheritance( die ), 'die has to be a base object (inheritance)'
 
-        type_id = self._get_type_id( die )
+        type_id = DIE.get_type_id( die, self.dies )
         type = self._get_or_create_type( type_id )
-        this_offset = self._get_this_offset( die )
+        this_offset = DIE.get_this_offset( die )
 
         return Inheritance( type, this_offset )
 
-    def _is_template( self, die ):
-        return self._get_name( die ).count( '<' ) != 0
-
-    def _is_stl( self, die ):
-        return self._get_name( die ).startswith( '_' )
-
-    def _is_local_class( self, die ):
-        # todo
-        return False
-
-    def _is_inheritance( self, die ):
-        return die.tag == 'DW_TAG_inheritance'
-
-    def _is_declaration( self, die ):
-        return 'DW_AT_declaration' in die.attributes
 
     def _skip_type( self, die ):
-        if self._is_declaration( die ):
-            #print( '\tdeclaration skipped' )
+        if DIE.is_declaration( die ):
             return True
 
-        if self._is_stl( die ):
-            #print( '\tSTL skipped' )
+        if DIE.is_stl( die, self.dies ):
             return True
 
-        if self._is_template( die ):
-            #print( '\ttemplate skipped' )
+        if DIE.is_template( die, self.dies ):
             return True
 
-        if self._is_local_class( die ):
-            #print( '\tlocal class skipped' )
+        if DIE.is_local_class( die ):
             return True
 
-        if self._get_name( die ) == 'anonymous':
-            #print( '\tno name skipped' )
+        if DIE.get_name( die, self.dies ) == 'anonymous':
             return True
 
         return False
 
     def _convert_die_to_struct( self, die ):
-        if self._is_struct( die ) == False:
+        if DIE.is_struct( die ) == False:
             return None
 
         try:
             if self._skip_type( die ):
                 return None
 
-            name = self._get_name( die )
-            size = self._get_size( die )
+            name = DIE.get_name( die, self.dies )
+            size = DIE.get_size( die )
             struct = StructType( name, size )
 
             for child in die.iter_children():
-                if self._is_inheritance( child ):
-                    struct.add_inheritance( self._convert_die_to_inheritance( child ) )
-                elif self._is_member( child ):
+                if DIE.is_inheritance( child ):
+                    struct.add_member( self._convert_die_to_inheritance( child ) )
+                elif DIE.is_member( child ):
                     struct.add_member( self._convert_die_to_member( child ) )
 
         except KeyError as error:
@@ -610,7 +614,7 @@ class ClassCompacter:
 
         self.die_converter = DIEConverter()
 
-    def processFile( self, fileName ):
+    def process_file( self, fileName ):
         with open( fileName, 'rb' ) as file:
             try:
                 elfFile = ELFFile( file )
@@ -618,30 +622,28 @@ class ClassCompacter:
                 print( "Could not open ELF file: %s" % fileName )
                 return
 
-            self._processDWARF( elfFile )
+            self._process_DWARF( elfFile )
 
-    def getDIEs( self ):
-        return self.dies
+    # details
 
-    def _processDWARF( self, elfFile ):
+    def _process_DWARF( self, elfFile ):
         if not elfFile.has_dwarf_info():
             print( "File %s has no DWARF info" % fileName )
             return
 
         dwarfInfo = elfFile.get_dwarf_info()
         self.die_converter.process( dwarfInfo )
-        types = self.die_converter.get_types()
 
-        #for id, type in types.items():
-        #    type.calculate_padding()
+        for id, type in self.die_converter.get_types().items():
+            print( type.get_full_desc() )
 
-        for k,v in types.items():
-            print( v.get_full_desc() )
+    def _compact_types( self ):
+        pass
 
 def main():
     for fileName in sys.argv[1:]:
         cc = ClassCompacter()
-        cc.processFile( fileName )
+        cc.process_file( fileName )
 
 if __name__ == "__main__":
     main()
