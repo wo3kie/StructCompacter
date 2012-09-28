@@ -77,16 +77,16 @@ class Type:
 
     def get_brief_desc( self ):
         return '[' + self.get_name() + ' (' + str( self.get_size() ) + ')]'
-        
+
     def get_full_desc( self ):
         return self.get_brief_desc()
-        
+
     def _get_name( self ):
         pass
 
     def _decorate_name( self, name ):
         pass
-        
+
     def get_size( self ):
         pass
 
@@ -96,7 +96,7 @@ class UnknownType( Type ):
 
     def _decorate_name( self, name ):
         return name
-        
+
     def get_size( self ):
         return -1
 
@@ -141,7 +141,7 @@ class RefType( Type ):
 
     def _decorate_name( self, name ):
         return name + '&'
-        
+
     def get_size( self ):
         assert RefType._size != None, 'Ref size is not set'
 
@@ -160,7 +160,7 @@ class BaseType( Type ):
 
     def _decorate_name( self, name ):
         return name
-        
+
     def get_size( self ):
         return self.size
 
@@ -184,28 +184,50 @@ class UnionType( Type ):
     def calculate_padding( self ):
         pass
 
-class ArraySizeNotKnown( Exception ):
-    def __str__( self ):
-        return 'size for the ArrayType is not known'
-        
 class ArrayType( Type ):
     def __init__( self, type ):
         self.type = type
 
     def get_brief_desc( self ):
         return '[' + self.get_name() + ' (?)]'
-        
+
     def _get_name( self ):
         return self.type.get_name()
-    
+
     def _decorate_name( self, name ):
         return '[' + name + ']'
-        
+
     def get_size( self ):
         # no such information in DWARF
         # type is known
         # number of items in array is not known
-        raise ArraySizeNotKnown()
+        raise None
+
+    def calculate_padding( self ):
+        pass
+
+class DeclarationType( Type ):
+    def __init__( self, name ):
+        self.name = name
+        self.size = None
+
+    def _get_name( self ):
+        return self.name
+
+    def _decorate_name( self, name ):
+        return 'decl{' + name + '}'
+
+    def get_brief_desc( self ):
+        return '[' + self.get_name() + ' (?)]'
+
+    def set_size( self, size ):
+        self.size = size
+
+    def get_size( self ):
+        # in DWARF there is only declaration of the type
+        # size is calculated later on and set explicitly
+        assert self.size != None, 'DeclarationType::size is not set'
+        return self.size
 
     def calculate_padding( self ):
         pass
@@ -219,10 +241,10 @@ class StructType( Type ):
 
     def _get_name( self ):
         return self.name
-    
+
     def _decorate_name( self, name ):
         return '{' + name + '}'
-        
+
     def get_size( self ):
         return self.size
 
@@ -260,13 +282,13 @@ class StructType( Type ):
 
                 current_begin = current.get_this_offset()
                 previous_end = previous.get_this_offset() + previous.get_size()
-                
+
                 if current_begin > previous_end:
                     padding = Padding( current_begin - previous_end )
                     member = Member( 'padding', -1, -1, padding, previous_end )
                     components.append( member )
 
-            except ArraySizeNotKnown:
+            except Exception:
                 pass
 
             components.append( current )
@@ -289,7 +311,7 @@ class EnumType( Type ):
 
     def _decorate_name( self, name ):
         return 'enum{' + name + '}'
-        
+
     def get_size( self ):
         return self.size
 
@@ -305,13 +327,13 @@ class Padding( Type ):
 
     def _decorate_name( self, name ):
         return '{' + name + '}'
-        
+
     def get_size( self ):
         return self.size
 
     def calculate_padding( self ):
         pass
-        
+
 class DIEConverter:
     def __init__( self ):
         self.dies = {}
@@ -393,7 +415,7 @@ class DIEConverter:
         except KeyError:
             pass
 
-        raise KeyError( 'No DW_AT_(byte_)size for 0x%x' % die.offset )
+        return None
 
     def _get_file_id( self, die ):
         try:
@@ -433,30 +455,39 @@ class DIEConverter:
     def _resolve_type( self, type_id ):
         die = self.dies[ type_id ]
 
+        # process types not dependent on 'DW_AT_size'
         if die.tag == 'DW_TAG_pointer_type':
             return PtrType( self._resolve_type( self._get_type_id( die ) ) )
         elif die.tag == 'DW_TAG_reference_type':
             return RefType( self._resolve_type( self._get_type_id( die ) ) )
-        elif die.tag == 'DW_TAG_base_type':
-            return BaseType( self._get_name( die ), self._get_size( die ) )
         elif die.tag == 'DW_TAG_typedef':
             return self._resolve_type( self._get_type_id( die ) )
-        elif die.tag == 'DW_TAG_union_type':
-            return UnionType( self._get_name( die ), self._get_size( die ) )
-        elif die.tag == 'DW_TAG_array_type':
-            return ArrayType( self._resolve_type( self._get_type_id( die ) ) )
-        elif die.tag == 'DW_TAG_class_type':
-            return StructType( self._get_name( die ), self._get_size( die ) )
-        elif die.tag == 'DW_TAG_structure_type':
-            return StructType( self._get_name( die ), self._get_size( die ) )
         elif die.tag == 'DW_TAG_const_type':
             return self._resolve_type( self._get_type_id( die ) )
         elif die.tag == 'DW_TAG_volatile_type':
             return self._resolve_type( self._get_type_id( die ) )
+        elif die.tag == 'DW_TAG_array_type':
+            return ArrayType( self._resolve_type( self._get_type_id( die ) ) )
+
+        # process types with missing 'DW_AT_size'
+        size = self._get_size( die )
+
+        if size == None:
+            return DeclarationType( self._get_name( die ) )
+        
+        # process types with 'DW_AT_size'
+        if die.tag == 'DW_TAG_base_type':
+            return BaseType( self._get_name( die ), size )
+        elif die.tag == 'DW_TAG_union_type':
+            return UnionType( self._get_name( die ), size )
+        elif die.tag == 'DW_TAG_class_type':
+            return StructType( self._get_name( die ), size )
+        elif die.tag == 'DW_TAG_structure_type':
+            return StructType( self._get_name( die ), size )
         elif die.tag == 'DW_TAG_enumeration_type':
-            return EnumType( self._get_name( die ), self._get_size( die ) )
-        else:
-            return UnknownType()
+            return EnumType( self._get_name( die ), size )
+
+        return UnknownType()
 
     def _get_or_create_type( self, type_id ):
         try:
@@ -601,8 +632,8 @@ class ClassCompacter:
         self.die_converter.process( dwarfInfo )
         types = self.die_converter.get_types()
 
-        for id, type in types.items():
-            type.calculate_padding()
+        #for id, type in types.items():
+        #    type.calculate_padding()
 
         for k,v in types.items():
             print( v.get_full_desc() )
