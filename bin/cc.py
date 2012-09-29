@@ -50,17 +50,28 @@ class Object:
     def get_size( self ):
         return self.type.get_size()
 
+    def get_brief_desc( self ):
+        pass
+
+    def get_full_desc( self ):
+        return self.get_brief_desc()
+
+    # details
+
+    def __str__( self ):
+        return self.get_full_desc()
+
 class Inheritance( Object ):
     def __init__( self, type, this_offset ):
         Object.__init__( self, type, this_offset )
 
-    def __str__( self ):
+    def is_moveable( self ):
+        return False
+
+    def get_brief_desc( self ):
         return 'Inheritance ' \
             + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
-
-    def is_moveable( self ):
-        return False
 
 class Member( Object ):
     def __init__( self, name, file_id, line_no, type, this_offset ):
@@ -76,11 +87,29 @@ class Member( Object ):
 
         return True
 
-    # details
-    def __str__( self ):
+    def get_brief_desc( self ):
+        return \
+            abbrev( self.name, 30 ) \
+            + self.type.get_brief_desc() \
+            + ' [this+' + str( self.this_offset ) + ']'
+
+    def get_full_desc( self ):
         return \
             abbrev( self.name, 30 ) \
             + ' (' + str( self.file_id ) + ':' + str( self.line_no ) + ') ' \
+            + self.type.get_brief_desc() \
+            + ' [this+' + str( self.this_offset ) + ']'
+
+class Padding( Object ):
+    def __init__( self, type, this_offset ):
+        Object.__init__( self, type, this_offset )
+
+    def is_moveable( self ):
+        return True
+
+    def get_brief_desc( self ):
+        return \
+            'padding' \
             + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
 
@@ -88,8 +117,8 @@ class Member( Object ):
 # Types representation
 #
 class Visitable:
-    def accept( self, visitor, *args ):
-        visitor.visit( self, *args )
+    def accept( self, visitor, * args ):
+        visitor.visit( self, * args )
 
 class Type( Visitable ):
     def get_name( self ):
@@ -178,18 +207,21 @@ class BaseType( Type ):
         self.name = name
         self.size = size
 
+    def get_size( self ):
+        return self.size
+
     # details
 
     def _get_name( self ):
         return self.name
 
-    def get_size( self ):
-        return self.size
-
 class UnionType( Type ):
     def __init__( self, name, size ):
         self.name = name
         self.size = size
+
+    def get_size( self ):
+        return self.size
 
     # details
 
@@ -198,9 +230,6 @@ class UnionType( Type ):
 
     def _decorate_name( self, name ):
         return '{' + name + '}'
-
-    def get_size( self ):
-        return self.size
 
 class ArrayType( Type ):
     def __init__( self, type ):
@@ -265,6 +294,7 @@ class StructType( Type ):
     def __init__( self, name, size ):
         self.name = name
         self.size = size
+        self.is_valid = True
 
         self.components = []
 
@@ -274,8 +304,11 @@ class StructType( Type ):
     def get_full_desc( self ):
         result = abbrev( self.get_name(), 50 ) + ' (' + str( self.get_size() ) + ')'
 
+        if self.get_is_valid() == False:
+            result += ' (!)'
+
         for comp in self.components:
-            result += '\n\t' + str( comp )
+            result += '\n\t' + comp.get_brief_desc()
 
         return result
 
@@ -287,6 +320,15 @@ class StructType( Type ):
 
     def get_members( self ):
         return self.components
+
+    def set_members( self, members ):
+        self.components = members
+
+    def get_is_valid( self ):
+        return self.is_valid
+
+    def set_is_valid( self, is_valid ):
+        self.is_valid = is_valid
 
     # details
 
@@ -301,6 +343,9 @@ class EnumType( Type ):
         self.name = name
         self.size = size
 
+    def get_size( self ):
+        return self.size
+
     # details
 
     def _get_name( self ):
@@ -312,6 +357,12 @@ class EnumType( Type ):
 class PaddingType( Type ):
     def __init__( self, size ):
         self.size = size
+
+    def get_brief_desc( self ):
+        return '[' + self.get_name() + ' (' + str( self.size ) + ')]'
+
+    def get_size( self ):
+        return self.size
 
     # details
 
@@ -339,56 +390,56 @@ class Visitor:
         self.dispatcher[ EnumType ] = self.visit_enum_type
         self.dispatcher[ PaddingType ] = self.visit_padding_type
 
-    def visit( self, interface, *args ):
-        self.dispatcher[ interface.__class__ ]( interface, *args )
+    def visit( self, interface, * args ):
+        self.dispatcher[ interface.__class__ ]( interface, * args )
 
-    def visit_unknown( self, unknown, *args ):
+    def visit_unknown( self, unknown, * args ):
         return
 
-    def visit_ptr_type( self, ptr, *args ):
+    def visit_ptr_type( self, ptr, * args ):
         return
 
-    def visit_ref_type( self, refe, *args ):
+    def visit_ref_type( self, refe, * args ):
         return
 
-    def visit_base_type( self, base, *args ):
+    def visit_base_type( self, base, * args ):
         return
 
-    def visit_union_type( self, union, *args ):
+    def visit_union_type( self, union, * args ):
         return
 
-    def visit_declaration_type( self, declaration, *args ):
+    def visit_declaration_type( self, declaration, * args ):
         return
 
-    def visit_array_type( self, array, *args ):
+    def visit_array_type( self, array, * args ):
         return
 
-    def visit_struct_type( self, struct, *args ):
+    def visit_struct_type( self, struct, * args ):
         return
 
-    def visit_enum_type( self, enum, *args ):
+    def visit_enum_type( self, enum, * args ):
         return
 
-    def visit_padding_type( self, padding, *args ):
+    def visit_padding_type( self, padding, * args ):
         return
 
 class ResolveTypeSizeVisitor( Visitor ):
     def __init__( self ):
         Visitor.__init__( self )
 
-    def visit_declaration_type( self, declaration, *args ):
-        if declaration.get_size() == None:
-            declaration.set_size( args[ 0 ] )
-        elif declaration.get_size() > args[ 0 ]:
-            declaration.set_size( args[ 0 ] )
-        else:
-            pass
+    def visit_declaration_type( self, declaration, * args ):
+        self._set_size( declaration, args[ 0 ] )
 
-    def visit_array_type( self, array, *args ):
-        if array.get_size() == None:
-            array.set_size( args[ 0 ] )
-        elif array.get_size() > args[ 0 ]:
-            array.set_size( args[ 0 ] )
+    def visit_array_type( self, array, * args ):
+        self._set_size( array, args[ 0 ] )
+
+    # details
+
+    def _set_size( self, item, size ):
+        if item.get_size() == None:
+            item.set_size( size )
+        elif item.get_size() > size:
+            item.set_size( size )
         else:
             pass
 
@@ -396,12 +447,64 @@ class CompactStructVisitor( Visitor ):
     def __init__( self ):
         Visitor.__init__( self )
 
-    def visit_struct_type( self, struct, *args ):
-        self._resolve_type_size( struct )
+    def visit_struct_type( self, struct, * args ):
+        try:
+            self._resolve_type_size( struct )
+            self._calculate_padding( struct )
+        except Exception:
+            struct.set_is_valid( False )
 
     # details
 
+    def _calculate_padding( self, struct ):
+        if struct.get_is_valid() == False:
+            return
+
+        members = struct.get_members()
+        members_with_padding = []
+
+        if len( members ) == 0:
+            return
+
+        for i in range( 0, len( members ) - 1 ):
+            current = members[ i ]
+            next = members[ i + 1 ]
+            try:
+                padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
+            except TypeError:
+                breakHere = True
+
+            if padding_size == 0:
+                members_with_padding.append( current )
+            elif padding_size > 0:
+                members_with_padding.append( current )
+
+                padding_this_offset = current.get_this_offset() + current.get_size()
+                padding = Padding( PaddingType( padding_size ), padding_this_offset )
+                members_with_padding.append( padding )
+            else:
+                raise Exception( 'EBO for type %s' % struct.get_name() )
+
+        current = members[ -1 ]
+        padding_size = struct.get_size() - current.get_this_offset() - current.get_size()
+
+        if padding_size == 0:
+            members_with_padding.append( current )
+        elif padding_size > 0:
+            members_with_padding.append( current )
+
+            padding_this_offset = current.get_this_offset() + current.get_size()
+            padding = Padding( PaddingType( padding_size ), padding_this_offset )
+            members_with_padding.append( padding )
+        else:
+            raise Exception( 'EBO for type %s' % struct.get_name() )
+
+        struct.set_members( members_with_padding )
+
     def _resolve_type_size( self, struct ):
+        if struct.get_is_valid() == False:
+            return
+
         members = struct.get_members()
 
         if len( members ) == 0:
@@ -413,15 +516,15 @@ class CompactStructVisitor( Visitor ):
         for i in range( 0, len( members ) -1 ):
             current = members[ i ]
             next = members[ i + 1 ]
-            size = next.get_this_offset() - current.get_this_offset()
+            type_size = next.get_this_offset() - current.get_this_offset()
 
-            current.get_type().accept( visitor, size )
+            current.get_type().accept( visitor, type_size )
 
         # resolve last
         current = members[ -1 ]
-        size = struct.get_size() - current.get_this_offset()
+        type_size = struct.get_size() - current.get_this_offset()
 
-        current.get_type().accept( visitor, size )
+        current.get_type().accept( visitor, type_size )
 
 #
 # Utils for DIE
