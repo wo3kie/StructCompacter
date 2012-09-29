@@ -205,15 +205,24 @@ class UnionType( Type ):
 class ArrayType( Type ):
     def __init__( self, type ):
         self.type = type
+        self.size = None
 
     def get_brief_desc( self ):
-        return '[' + self.get_name() + ' (?)]'
+        if self.get_size() == None:
+            size = '?'
+        else:
+            size = str( self.get_size() )
+
+        return '[' + self.get_name() + ' (' + size + ')]'
+
+    def set_size( self, size ):
+        self.size = size
 
     def get_size( self ):
         # no such information in DWARF
         # type is known
         # number of items in array is not known
-        return None
+        return self.size
 
     # details
 
@@ -363,7 +372,7 @@ class Visitor:
     def visit_padding_type( self, padding, *args ):
         return
 
-class ResolveDeclarationSizeVisitor( Visitor ):
+class ResolveTypeSizeVisitor( Visitor ):
     def __init__( self ):
         Visitor.__init__( self )
 
@@ -375,31 +384,44 @@ class ResolveDeclarationSizeVisitor( Visitor ):
         else:
             pass
 
+    def visit_array_type( self, array, *args ):
+        if array.get_size() == None:
+            array.set_size( args[ 0 ] )
+        elif array.get_size() > args[ 0 ]:
+            array.set_size( args[ 0 ] )
+        else:
+            pass
+
 class CompactStructVisitor( Visitor ):
     def __init__( self ):
         Visitor.__init__( self )
 
     def visit_struct_type( self, struct, *args ):
-        self._resolve_declaration_size( struct, *args )
+        self._resolve_type_size( struct )
 
     # details
 
-    def _resolve_declaration_size( self, struct, *args ):
+    def _resolve_type_size( self, struct ):
         members = struct.get_members()
 
         if len( members ) == 0:
             return
 
-        resolve_declaration_size_visitor = ResolveDeclarationSizeVisitor()
+        visitor = ResolveTypeSizeVisitor()
 
+        # resolve all but last
         for i in range( 0, len( members ) -1 ):
             current = members[ i ]
             next = members[ i + 1 ]
             size = next.get_this_offset() - current.get_this_offset()
 
-            members[ i ].get_type().accept( resolve_declaration_size_visitor, size )
+            current.get_type().accept( visitor, size )
 
-        members[ -1 ].get_type().accept( resolve_declaration_size_visitor, struct.get_size() )
+        # resolve last
+        current = members[ -1 ]
+        size = struct.get_size() - current.get_this_offset()
+
+        current.get_type().accept( visitor, size )
 
 #
 # Utils for DIE
