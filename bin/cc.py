@@ -302,7 +302,12 @@ class StructType( Type ):
         return self.size
 
     def get_full_desc( self ):
-        result = abbrev( self.get_name(), 50 ) + ' (' + str( self.get_size() ) + ')'
+        result = abbrev( self.get_name(), 50 )
+        result += ' ('
+        result += str( self.get_size() )
+        result += '/'
+        result += str( calculate_total_padding( self ) )
+        result += ')'
 
         if self.get_is_valid() == False:
             result += ' (!)'
@@ -442,6 +447,28 @@ class ResolveTypeSizeVisitor( Visitor ):
             item.set_size( size )
         else:
             pass
+
+class CalculateTotalPaddingVisitor( Visitor ):
+    def __init__( self ):
+        Visitor.__init__( self )
+
+        self.total_padding = 0
+
+    def visit_padding_type( self, padding, * args ):
+        self.total_padding += padding.get_size()
+
+    def get_total_padding( self ):
+        return self.total_padding
+
+def calculate_total_padding( struct ):
+    members = struct.get_members()
+
+    total_padding_visitor = CalculateTotalPaddingVisitor()
+
+    for member in members:
+        member.get_type().accept( total_padding_visitor )
+
+    return total_padding_visitor.get_total_padding()
 
 class CompactStructVisitor( Visitor ):
     def __init__( self ):
