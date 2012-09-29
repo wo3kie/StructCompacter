@@ -70,6 +70,13 @@ class Member( Object ):
         self.file_id = file_id
         self.line_no = line_no
 
+    def is_moveable( self ):
+        if self.name.startswith( '_vptr.' ):
+            return False
+
+        return True
+
+    # details
     def __str__( self ):
         return \
             abbrev( self.name, 30 ) \
@@ -77,16 +84,14 @@ class Member( Object ):
             + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
 
-    def is_moveable( self ):
-        if self.name.startswith( '_vptr' ):
-            return False
-
-        return True
-
 #
 # Types representation
 #
-class Type:
+class Visitable:
+    def accept( self, visitor, *args ):
+        visitor.visit( self, *args )
+
+class Type( Visitable ):
     def get_name( self ):
         return self._decorate_name( abbrev( self._get_name(), 30 ) )
 
@@ -208,7 +213,7 @@ class ArrayType( Type ):
         # no such information in DWARF
         # type is known
         # number of items in array is not known
-        raise None
+        return None
 
     # details
 
@@ -224,7 +229,12 @@ class DeclarationType( Type ):
         self.size = None
 
     def get_brief_desc( self ):
-        return '[' + self.get_name() + ' (?)]'
+        if self.get_size() == None:
+            size = '?'
+        else:
+            size = str( self.get_size() )
+
+        return '[' + self.get_name() + ' (' + size + ')]'
 
     def set_size( self, size ):
         self.size = size
@@ -232,8 +242,6 @@ class DeclarationType( Type ):
     def get_size( self ):
         # in DWARF there is only declaration of the type
         # size is calculated later on and set explicitly
-        assert self.size != None, 'DeclarationType::size is not set'
-
         return self.size
 
     # details
@@ -268,6 +276,9 @@ class StructType( Type ):
 
         self.components.append( member )
 
+    def get_members( self ):
+        return self.components
+
     # details
 
     def _get_name( self ):
@@ -300,6 +311,95 @@ class PaddingType( Type ):
 
     def _decorate_name( self, name ):
         return '{' + name + '}'
+
+#
+# Visitor for Type hierarchy
+#
+class Visitor:
+    def __init__( self ):
+        self.dispatcher = {}
+
+        self.dispatcher[ UnknownType ] = self.visit_unknown
+        self.dispatcher[ PtrType ] = self.visit_ptr_type
+        self.dispatcher[ RefType ] = self.visit_ref_type
+        self.dispatcher[ BaseType ] = self.visit_base_type
+        self.dispatcher[ UnionType ] = self.visit_union_type
+        self.dispatcher[ DeclarationType ] = self.visit_declaration_type
+        self.dispatcher[ ArrayType ] = self.visit_array_type
+        self.dispatcher[ StructType ] = self.visit_struct_type
+        self.dispatcher[ EnumType ] = self.visit_enum_type
+        self.dispatcher[ PaddingType ] = self.visit_padding_type
+
+    def visit( self, interface, *args ):
+        self.dispatcher[ interface.__class__ ]( interface, *args )
+
+    def visit_unknown( self, unknown, *args ):
+        return
+
+    def visit_ptr_type( self, ptr, *args ):
+        return
+
+    def visit_ref_type( self, refe, *args ):
+        return
+
+    def visit_base_type( self, base, *args ):
+        return
+
+    def visit_union_type( self, union, *args ):
+        return
+
+    def visit_declaration_type( self, declaration, *args ):
+        return
+
+    def visit_array_type( self, array, *args ):
+        return
+
+    def visit_struct_type( self, struct, *args ):
+        return
+
+    def visit_enum_type( self, enum, *args ):
+        return
+
+    def visit_padding_type( self, padding, *args ):
+        return
+
+class ResolveDeclarationSizeVisitor( Visitor ):
+    def __init__( self ):
+        Visitor.__init__( self )
+
+    def visit_declaration_type( self, declaration, *args ):
+        if declaration.get_size() == None:
+            declaration.set_size( args[ 0 ] )
+        elif declaration.get_size() > args[ 0 ]:
+            declaration.set_size( args[ 0 ] )
+        else:
+            pass
+
+class CompactStructVisitor( Visitor ):
+    def __init__( self ):
+        Visitor.__init__( self )
+
+    def visit_struct_type( self, struct, *args ):
+        self._resolve_declaration_size( struct, *args )
+
+    # details
+
+    def _resolve_declaration_size( self, struct, *args ):
+        members = struct.get_members()
+
+        if len( members ) == 0:
+            return
+
+        resolve_declaration_size_visitor = ResolveDeclarationSizeVisitor()
+
+        for i in range( 0, len( members ) -1 ):
+            current = members[ i ]
+            next = members[ i + 1 ]
+            size = next.get_this_offset() - current.get_this_offset()
+
+            members[ i ].get_type().accept( resolve_declaration_size_visitor, size )
+
+        members[ -1 ].get_type().accept( resolve_declaration_size_visitor, struct.get_size() )
 
 #
 # Utils for DIE
@@ -634,11 +734,19 @@ class ClassCompacter:
         dwarfInfo = elfFile.get_dwarf_info()
         self.die_converter.process( dwarfInfo )
 
+        self._compact_types()
+
         for id, type in self.die_converter.get_types().items():
             print( type.get_full_desc() )
 
+    def _get_types( self ):
+        return self.die_converter.get_types()
+
     def _compact_types( self ):
-        pass
+        compact_struct_visitor = CompactStructVisitor()
+
+        for id, type in self._get_types().items():
+            type.accept( compact_struct_visitor, None )
 
 def main():
     for fileName in sys.argv[1:]:
