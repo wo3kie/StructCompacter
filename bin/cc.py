@@ -110,21 +110,61 @@ class Padding( Object ):
 
     def get_brief_desc( self ):
         return \
-            'padding' \
+            '\tpadding ' \
             + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
 
-#
-# Types representation
-#
+
 class Visitable:
     def accept( self, visitor, * args ):
         visitor.visit( self, * args )
 
+#
+# Size
+#
+class Size:
+    def set( self, value ):
+        pass
+
+    def get( self ):
+        pass
+
+class DefinedSize( Size ):
+    def __init__( self, size ):
+        self.size = size
+
+    def set( self, size ):
+        pass
+
+    def get( self ):
+        return self.size
+
+class UndefSize( Size ):
+    def __init__( self ):
+        self.size = None
+
+    def set( self, size ):
+        if self.size == None:
+            self.size = size
+        elif self.size > size:
+            self.size = size
+        else:
+            pass
+
+    def get( self ):
+        return self.size
+
+#
+# Types representation
+#
 class Type( Visitable ):
     def __init__( self, name, size ):
         self.name = name
-        self.size = size
+
+        if size == None:
+            self.size = UndefSize()
+        else:
+            self.size = DefinedSize( size )
 
     def set_name( self, name ):
         self.name = name
@@ -136,10 +176,10 @@ class Type( Visitable ):
         return self._decorate_name( abbrev( self._get_name(), 30 ) )
 
     def set_size( self, size ):
-        self.size = size
+        self.size.set( size )
 
     def get_size( self ):
-        return self.size
+        return self.size.get()
 
     def get_alignment( self ):
         return self.get_size()
@@ -236,28 +276,6 @@ class ArrayType( Type ):
     def _decorate_name( self, name ):
         return '[' + name + ']'
 
-#class DeclarationType( Type ):
-#    def __init__( self, name ):
-#        Type.__init__( self, name, None )
-#
-#        self.size = None
-#
-#    def get_brief_desc( self ):
-#        if self.get_size() == None:
-#            size = '?'
-#        else:
-#            size = str( self.get_size() )
-#
-#        return '[' + self.get_name() + ' (' + size + ')]'
-#
-#    def get_alignment( self ):
-#        return 8
-#
-#    # details
-#
-#    def _decorate_name( self, name ):
-#        return 'd{' + name + '}'
-
 class StructType( Type ):
     def __init__( self, name, size ):
         Type.__init__( self, name, size )
@@ -338,7 +356,7 @@ class PaddingType( Type ):
         Type.__init__( self, 'Padding', size )
 
     def get_brief_desc( self ):
-        return '[' + self.get_name() + ' (' + str( self.size ) + ':1)]'
+        return '[' + self.get_name() + ' (' + str( self.get_size() ) + ':1)]'
 
     def get_alignment( self ):
         return 1
@@ -398,32 +416,6 @@ class Visitor:
 
     def visit_padding_type( self, padding, * args ):
         return
-
-class ResolveTypeSizeVisitor( Visitor ):
-    def __init__( self ):
-        Visitor.__init__( self )
-
-    def visit_unknown_type( self, declaration, * args ):
-        self._set_size( declaration, args[ 0 ] )
-
-    def visit_struct_type( self, struct, * args ):
-        if struct.get_size() != None:
-            return
-
-        self._set_size( struct, args[ 0 ] )
-
-    def visit_array_type( self, array, * args ):
-        self._set_size( array, args[ 0 ] )
-
-    # details
-
-    def _set_size( self, item, size ):
-        if item.get_size() == None:
-            item.set_size( size )
-        elif item.get_size() > size:
-            item.set_size( size )
-        else:
-            pass
 
 class CalculateTotalPaddingVisitor( Visitor ):
     def __init__( self ):
@@ -514,21 +506,19 @@ class CompactStructVisitor( Visitor ):
         if len( members ) == 0:
             return
 
-        visitor = ResolveTypeSizeVisitor()
-
         # resolve all but last
         for i in range( 0, len( members ) -1 ):
             current = members[ i ]
             next = members[ i + 1 ]
             type_size = next.get_this_offset() - current.get_this_offset()
 
-            current.get_type().accept( visitor, type_size )
+            current.get_type().set_size( type_size )
 
         # resolve last
         current = members[ -1 ]
         type_size = struct.get_size() - current.get_this_offset()
 
-        current.get_type().accept( visitor, type_size )
+        current.get_type().set_size( type_size )
 
 #
 # Utils for DIE
@@ -890,17 +880,17 @@ class ClassCompacter:
         self._compact_types()
 
         for id, type in self.die_converter.get_types().items():
-            #if type.get_name().count( '<' ) > 0:
-            #    continue
+            if type.get_name().count( '<' ) > 0:
+                continue
 
-            #if type._get_name().startswith( '_' ):
-            #    continue
+            if type._get_name().startswith( '_' ):
+                continue
 
-            #if not type.get_is_compactable():
-            #    continue
+            if not type.get_is_compactable():
+                continue
 
-            #if calculate_total_padding( type ) == 0:
-            #    continue
+            if calculate_total_padding( type ) == 0:
+                continue
 
             print( '%x %s' % ( id, type.get_full_desc() ) )
 
