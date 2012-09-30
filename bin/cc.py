@@ -90,6 +90,7 @@ class Member( Object ):
     def get_brief_desc( self ):
         return \
             abbrev( self.name, 30 ) \
+            + ' ' \
             + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
 
@@ -121,52 +122,57 @@ class Visitable:
         visitor.visit( self, * args )
 
 class Type( Visitable ):
+    def __init__( self, name, size ):
+        self.name = name
+        self.size = size
+
+    def set_name( self, name ):
+        self.name = name
+
     def get_name( self ):
+        return self._decorate_name( self._get_name() )
+
+    def get_brief_name( self ):
         return self._decorate_name( abbrev( self._get_name(), 30 ) )
 
+    def set_size( self, size ):
+        self.size = size
+
     def get_size( self ):
-        pass
+        return self.size
+
+    def get_alignment( self ):
+        return self.get_size()
 
     def get_brief_desc( self ):
-        return '[' + self.get_name() + ' (' + str( self.get_size() ) + ')]'
+        return '[' + self.get_brief_name() \
+            + ' (' + str( self.get_size() ) + ':' + str( self.get_alignment() ) + ')]'
 
     def get_full_desc( self ):
         return self.get_brief_desc()
 
+    def get_is_compactable( self ):
+        return False
+
     # details
 
     def _get_name( self ):
-        pass
+        return self.name
 
     def _decorate_name( self, name ):
         return name
 
 class UnknownType( Type ):
-    def get_size( self ):
-        return None
+    def __init__( self ):
+        Type.__init__( self, 'unknown', None )
 
-    # details
-
-    def _get_name( self ):
-        return "unknown"
+    def get_alignment( self ):
+        return 8
 
 class PtrType( Type ):
-    # static
-    _size = None
-
-    @staticmethod
-    def set_size( size ):
-        PtrType._size = size
-
-    # interface
-
-    def __init__( self, type ):
+    def __init__( self, type, size ):
+        Type.__init__( self, 'Ptr', size )
         self.type = type
-
-    def get_size( self ):
-        assert PtrType._size != None, 'PtrType::size is not set'
-
-        return PtrType._size
 
     # details
 
@@ -177,22 +183,9 @@ class PtrType( Type ):
         return name + '*'
 
 class RefType( Type ):
-    # static
-    _size = None
-
-    @staticmethod
-    def set_size( size ):
-        RefType._size = size
-
-    # interface
-
-    def __init__( self, type ):
+    def __init__( self, type, size ):
+        Type.__init__( self, 'Ref', size )
         self.type = type
-
-    def get_size( self ):
-        assert RefType._size != None, 'RefType::size is not set'
-
-        return RefType._size
 
     # details
 
@@ -204,37 +197,22 @@ class RefType( Type ):
 
 class BaseType( Type ):
     def __init__( self, name, size ):
-        self.name = name
-        self.size = size
-
-    def get_size( self ):
-        return self.size
-
-    # details
-
-    def _get_name( self ):
-        return self.name
+        Type.__init__( self, name, size )
 
 class UnionType( Type ):
     def __init__( self, name, size ):
-        self.name = name
-        self.size = size
-
-    def get_size( self ):
-        return self.size
+        Type.__init__( self, name, size )
 
     # details
 
-    def _get_name( self ):
-        return self.name
-
     def _decorate_name( self, name ):
-        return '{' + name + '}'
+        return 'u{' + name + '}'
 
 class ArrayType( Type ):
     def __init__( self, type ):
+        Type.__init__( self, 'Array', None )
+
         self.type = type
-        self.size = None
 
     def get_brief_desc( self ):
         if self.get_size() == None:
@@ -244,14 +222,11 @@ class ArrayType( Type ):
 
         return '[' + self.get_name() + ' (' + size + ')]'
 
-    def set_size( self, size ):
-        self.size = size
+    def get_alignment( self ):
+        return self.get_type().get_alignment()
 
-    def get_size( self ):
-        # no such information in DWARF
-        # type is known
-        # number of items in array is not known
-        return self.size
+    def get_type( self ):
+        return self.type
 
     # details
 
@@ -261,52 +236,58 @@ class ArrayType( Type ):
     def _decorate_name( self, name ):
         return '[' + name + ']'
 
-class DeclarationType( Type ):
-    def __init__( self, name ):
-        self.name = name
-        self.size = None
-
-    def get_brief_desc( self ):
-        if self.get_size() == None:
-            size = '?'
-        else:
-            size = str( self.get_size() )
-
-        return '[' + self.get_name() + ' (' + size + ')]'
-
-    def set_size( self, size ):
-        self.size = size
-
-    def get_size( self ):
-        # in DWARF there is only declaration of the type
-        # size is calculated later on and set explicitly
-        return self.size
-
-    # details
-
-    def _get_name( self ):
-        return self.name
-
-    def _decorate_name( self, name ):
-        return 'decl{' + name + '}'
+#class DeclarationType( Type ):
+#    def __init__( self, name ):
+#        Type.__init__( self, name, None )
+#
+#        self.size = None
+#
+#    def get_brief_desc( self ):
+#        if self.get_size() == None:
+#            size = '?'
+#        else:
+#            size = str( self.get_size() )
+#
+#        return '[' + self.get_name() + ' (' + size + ')]'
+#
+#    def get_alignment( self ):
+#        return 8
+#
+#    # details
+#
+#    def _decorate_name( self, name ):
+#        return 'd{' + name + '}'
 
 class StructType( Type ):
     def __init__( self, name, size ):
-        self.name = name
-        self.size = size
+        Type.__init__( self, name, size )
+
         self.is_valid = True
 
         self.components = []
 
-    def get_size( self ):
-        return self.size
+    def get_alignment( self ):
+        alignment = 1
+
+        for member in self.get_members():
+            member_alignment = member.get_type().get_alignment()
+
+            if member_alignment > alignment:
+                alignment = member_alignment
+
+        return alignment
 
     def get_full_desc( self ):
+        total_padding = calculate_total_padding( self )
+        alignment = self.get_alignment()
+
         result = abbrev( self.get_name(), 50 )
         result += ' ('
         result += str( self.get_size() )
         result += '/'
-        result += str( calculate_total_padding( self ) )
+        result += str( total_padding )
+        result += '/'
+        result += str( alignment )
         result += ')'
 
         if self.get_is_valid() == False:
@@ -335,47 +316,37 @@ class StructType( Type ):
     def set_is_valid( self, is_valid ):
         self.is_valid = is_valid
 
+    def get_is_compactable( self ):
+        return True
+
     # details
 
-    def _get_name( self ):
-        return self.name
-
     def _decorate_name( self, name ):
-        return '{' + name + '}'
+        return 's{' + name + '}'
 
 class EnumType( Type ):
     def __init__( self, name, size ):
-        self.name = name
-        self.size = size
-
-    def get_size( self ):
-        return self.size
+        Type.__init__( self, name, size )
 
     # details
 
-    def _get_name( self ):
-        return self.name
-
     def _decorate_name( self, name ):
-        return 'enum{' + name + '}'
+        return 'e{' + name + '}'
 
 class PaddingType( Type ):
     def __init__( self, size ):
-        self.size = size
+        Type.__init__( self, 'Padding', size )
 
     def get_brief_desc( self ):
-        return '[' + self.get_name() + ' (' + str( self.size ) + ')]'
+        return '[' + self.get_name() + ' (' + str( self.size ) + ':1)]'
 
-    def get_size( self ):
-        return self.size
+    def get_alignment( self ):
+        return 1
 
     # details
 
-    def _get_name( self ):
-        return 'Padding'
-
     def _decorate_name( self, name ):
-        return '{' + name + '}'
+        return 'p{' + name + '}'
 
 #
 # Visitor for Type hierarchy
@@ -384,12 +355,12 @@ class Visitor:
     def __init__( self ):
         self.dispatcher = {}
 
-        self.dispatcher[ UnknownType ] = self.visit_unknown
+        self.dispatcher[ UnknownType ] = self.visit_unknown_type
         self.dispatcher[ PtrType ] = self.visit_ptr_type
         self.dispatcher[ RefType ] = self.visit_ref_type
         self.dispatcher[ BaseType ] = self.visit_base_type
         self.dispatcher[ UnionType ] = self.visit_union_type
-        self.dispatcher[ DeclarationType ] = self.visit_declaration_type
+        #self.dispatcher[ DeclarationType ] = self.visit_declaration_type
         self.dispatcher[ ArrayType ] = self.visit_array_type
         self.dispatcher[ StructType ] = self.visit_struct_type
         self.dispatcher[ EnumType ] = self.visit_enum_type
@@ -398,7 +369,7 @@ class Visitor:
     def visit( self, interface, * args ):
         self.dispatcher[ interface.__class__ ]( interface, * args )
 
-    def visit_unknown( self, unknown, * args ):
+    def visit_unknown_type( self, unknown, * args ):
         return
 
     def visit_ptr_type( self, ptr, * args ):
@@ -432,8 +403,14 @@ class ResolveTypeSizeVisitor( Visitor ):
     def __init__( self ):
         Visitor.__init__( self )
 
-    def visit_declaration_type( self, declaration, * args ):
+    def visit_unknown_type( self, declaration, * args ):
         self._set_size( declaration, args[ 0 ] )
+
+    def visit_struct_type( self, struct, * args ):
+        if struct.get_size() != None:
+            return
+
+        self._set_size( struct, args[ 0 ] )
 
     def visit_array_type( self, array, * args ):
         self._set_size( array, args[ 0 ] )
@@ -678,43 +655,47 @@ class DIE:
 
         return result
 
+def skip_type( die, dies ):
+    if DIE.is_declaration( die ):
+        return True
+
+    if DIE.is_stl( die, dies ):
+        return True
+
+    if DIE.is_template( die, dies ):
+        return True
+
+    if DIE.is_local_class( die ):
+        return True
+
+    if DIE.get_name( die, dies ) == 'anonymous':
+        return True
+
+    return False
+
 #
 # DIEConverter from DWARF/DIEs into abstract representation of types
 #
 class DIEConverter:
     def __init__( self ):
         self.dies = {}
+
         self.types = {}
 
-        self.ptr_size = -1
+        self.ptr_size = None
+        self.ref_size = None
 
     def process( self, dwarf_info ):
-        PtrType.set_size( self._get_ptr_size( dwarf_info ) )
-        RefType.set_size( self._get_ptr_size( dwarf_info ) )
+        self.ptr_size = self._get_ptr_size( dwarf_info )
+        self.ref_size = self.ptr_size
 
         self._make_dies_mapping( dwarf_info )
-
-        self._process_dwarf_info( dwarf_info )
+        self._convert_die_to_structs( dwarf_info )
 
     def get_types( self ):
         return self.types
 
     # details
-
-    def _process_dwarf_info( self, dwarf_info ):
-        for cu in dwarf_info.iter_CUs():
-            self._process_cu( cu )
-
-    def _process_cu( self, cu ):
-        top_die = cu.get_top_DIE()
-
-        for die in top_die.iter_children():
-            struct = self._convert_die_to_struct( die )
-
-            if struct == None:
-                continue
-
-            self.types[ die.offset ] = struct
 
     def _get_ptr_size( self, dwarf_info ):
         for cu in dwarf_info.iter_CUs():
@@ -726,56 +707,89 @@ class DIEConverter:
     def _decode_file_name( self, file_id ):
         return 'main.cpp'
 
-    def _resolve_type( self, type_id ):
-        die = self.dies[ type_id ]
+    def _create_unknown_type( self, die ):
+        unknown_type = UnknownType()
+        self.types[ die.offset ] = unknown_type
+        return unknown_type
 
-        # process types not dependent on 'DW_AT_size'
-        if die.tag == 'DW_TAG_pointer_type':
-            return PtrType( self._resolve_type( DIE.get_type_id( die, self.dies ) ) )
-        elif die.tag == 'DW_TAG_reference_type':
-            return RefType( self._resolve_type( DIE.get_type_id( die, self.dies ) ) )
-        elif die.tag == 'DW_TAG_typedef':
-            return self._resolve_type( DIE.get_type_id( die, self.dies ) )
-        elif die.tag == 'DW_TAG_const_type':
-            return self._resolve_type( DIE.get_type_id( die, self.dies ) )
-        elif die.tag == 'DW_TAG_volatile_type':
-            return self._resolve_type( DIE.get_type_id( die, self.dies ) )
-        elif die.tag == 'DW_TAG_array_type':
-            return ArrayType( self._resolve_type( DIE.get_type_id( die, self.dies ) ) )
+    def _get_or_create_unknown_type( self, die ):
+        if die.offset in self.types:
+            return self.types[ die.offset ]
+        else:
+            return self._create_unknown_type( die )
 
-        # process types with missing 'DW_AT_size'
-        size = DIE.get_size( die )
+    def _create_type( self, die ):
+        type = self._resolve_type( die )
+        self.types[ die.offset ] = type
+        return type
 
-        if size == None:
-            return DeclarationType( DIE.get_name( die, self.dies ) )
+    def _get_or_create_type( self, die ):
+        if die.offset in self.types:
+            return self.types[ die.offset ]
+        else:
+            return self._create_type( die )
 
-        # process types with 'DW_AT_size'
+    def _resolve_type( self, die ):
+        if die.offset in self.types:
+            return self.types[ die.offset ]
+        else:
+            type = self._resolve_type_impl( die )
+            self.types[ die.offset ] = type
+            return type
+
+    def _resolve_type_impl( self, die ):
+
+        # process simple types
+
         name = DIE.get_name( die, self.dies )
+        size = DIE.get_size( die )
 
         if die.tag == 'DW_TAG_base_type':
             return BaseType( name, size )
         elif die.tag == 'DW_TAG_union_type':
             return UnionType( name, size )
         elif die.tag == 'DW_TAG_class_type':
-            return StructType( name, size )
+            return self._convert_die_to_struct( die )
         elif die.tag == 'DW_TAG_structure_type':
-            return StructType( name, size )
+            return self._convert_die_to_struct( die )
         elif die.tag == 'DW_TAG_enumeration_type':
             return EnumType( name, size )
 
-        return UnknownType()
+        # process derived types
 
-    def _get_or_create_type( self, type_id ):
-        try:
-            return self.types[ type_id ]
-        except KeyError:
-            pass
+        type_id = DIE.get_type_id( die, self.dies )
 
-        type = self._resolve_type( type_id )
+        if type_id == None:
+            type = self._get_or_create_unknown_type( die )
+        else:
+            type = self._get_or_create_type( self.dies[ type_id ] )
 
-        self.types[ type_id ] = type
+        if die.tag == 'DW_TAG_member':
+            return type
+        elif die.tag == 'DW_TAG_inheritance':
+            return type
+        elif die.tag == 'DW_TAG_typedef':
+            return type
+        elif die.tag == 'DW_TAG_const_type':
+            return type
+        elif die.tag == 'DW_TAG_volatile_type':
+            return type
+        elif die.tag == 'DW_TAG_pointer_type':
+            return PtrType( type, self.ptr_size )
+        elif die.tag == 'DW_TAG_reference_type':
+            return RefType( type, self.ref_size )
+        elif die.tag == 'DW_TAG_array_type':
+            return ArrayType( type )
+        else:
+            return UnknownType()
 
-        return type
+    def _resolve_member_type( self, die ):
+        type_id = DIE.get_type_id( die, self.dies )
+
+        if type_id == None:
+            return self._get_or_create_unknown_type( die )
+        else:
+            return self._resolve_type( self.dies[ type_id ] )
 
     def _convert_die_to_member( self, die ):
         assert DIE.is_member( die ), 'die has to be a member'
@@ -783,65 +797,39 @@ class DIEConverter:
         name = DIE.get_name( die, self.dies )
         file_id = DIE.get_file_id( die );
         line_no = DIE.get_line_number( die )
-        type_id = DIE.get_type_id( die, self.dies )
-        type = self._get_or_create_type( type_id )
+        type = self._resolve_member_type( die )
         this_offset = DIE.get_this_offset( die )
 
         return Member( name, file_id, line_no, type, this_offset )
 
     def _convert_die_to_inheritance( self, die ):
-        assert DIE.is_inheritance( die ), 'die has to be a base object (inheritance)'
+        assert DIE.is_inheritance( die ), 'die has to be a inheritance'
 
-        type_id = DIE.get_type_id( die, self.dies )
-        type = self._get_or_create_type( type_id )
+        type = self._resolve_member_type( die )
         this_offset = DIE.get_this_offset( die )
 
         return Inheritance( type, this_offset )
 
-
-    def _skip_type( self, die ):
-        if DIE.is_declaration( die ):
-            return True
-
-        if DIE.is_stl( die, self.dies ):
-            return True
-
-        if DIE.is_template( die, self.dies ):
-            return True
-
-        if DIE.is_local_class( die ):
-            return True
-
-        if DIE.get_name( die, self.dies ) == 'anonymous':
-            return True
-
-        return False
-
     def _convert_die_to_struct( self, die ):
-        if DIE.is_struct( die ) == False:
-            return None
+        assert DIE.is_struct( die ), 'die has to be a struct %s' % die.tag
 
         try:
-            if self._skip_type( die ):
-                return None
+            return self.types[ die.offset ]
 
-            name = DIE.get_name( die, self.dies )
-            size = DIE.get_size( die )
-            struct = StructType( name, size )
+        except KeyError:
+            struct = StructType( None, None )
+            self.types[ die.offset ] = struct
 
-            for child in die.iter_children():
-                if DIE.is_inheritance( child ):
-                    struct.add_member( self._convert_die_to_inheritance( child ) )
-                elif DIE.is_member( child ):
-                    struct.add_member( self._convert_die_to_member( child ) )
+        struct.set_name( DIE.get_name( die, self.dies ) )
+        struct.set_size( DIE.get_size( die ) )
 
-        except KeyError as error:
-            print( '\tError:', error, '- skipped' )
-            return None
-
-        except Exception as error:
-            print( '\tError:', error, '- skipped' )
-            return None
+        for child in die.iter_children():
+            if DIE.is_inheritance( child ):
+                struct.add_member( self._convert_die_to_inheritance( child ) )
+            elif DIE.is_member( child ):
+                struct.add_member( self._convert_die_to_member( child ) )
+            elif DIE.is_struct( child ):
+                self._convert_die_to_struct( child )
 
         return struct
 
@@ -851,11 +839,24 @@ class DIEConverter:
         for children in die.iter_children():
             self._make_dies_mapping_recursively( children )
 
+    def _convert_die_to_structs_recursively( self, die ):
+        if DIE.is_struct( die ):
+            self._convert_die_to_struct( die )
+
+        for children in die.iter_children():
+            self._convert_die_to_structs_recursively( children )
+
     def _make_dies_mapping( self, dwarf_info ):
         for cu in dwarf_info.iter_CUs():
             top_die = cu.get_top_DIE()
 
             self._make_dies_mapping_recursively( top_die )
+
+    def _convert_die_to_structs( self, dwarf_info ):
+        for cu in dwarf_info.iter_CUs():
+            top_die = cu.get_top_DIE()
+
+            self._convert_die_to_structs_recursively( top_die )
 
 #
 # ClassCompacter
@@ -889,7 +890,19 @@ class ClassCompacter:
         self._compact_types()
 
         for id, type in self.die_converter.get_types().items():
-            print( type.get_full_desc() )
+            #if type.get_name().count( '<' ) > 0:
+            #    continue
+
+            #if type._get_name().startswith( '_' ):
+            #    continue
+
+            #if not type.get_is_compactable():
+            #    continue
+
+            #if calculate_total_padding( type ) == 0:
+            #    continue
+
+            print( '%x %s' % ( id, type.get_full_desc() ) )
 
     def _get_types( self ):
         return self.die_converter.get_types()
