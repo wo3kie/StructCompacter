@@ -28,7 +28,16 @@ def abbrev( text, length ):
     if len( text ) <= length:
         return text
 
-    return text[0:length] + '...'
+    if length <= 3:
+        return text
+
+    return text[0:length-3] + '...'
+
+def is_template_name( text ):
+    return text.count( '<' ) != 0
+
+def is_stl_internal_name( text ):
+    return text.startswith( '_' )
 
 #
 # Visitable
@@ -36,7 +45,7 @@ def abbrev( text, length ):
 class Visitable:
     def accept( self, visitor, * args ):
         visitor.visit( self, * args )
-    
+
 #
 # Struct members representation
 #
@@ -44,6 +53,12 @@ class IMember( Visitable ):
     def __init__( self, type, this_offset ):
         self.type = type
         self.this_offset = this_offset
+
+    def get_name( self, width = None ):
+        if width == None:
+            return self._get_name()
+        else:
+            return abbrev( self._get_name(), width )
 
     def get_type( self ):
         return self.type
@@ -62,6 +77,9 @@ class IMember( Visitable ):
 
     # details
 
+    def _get_name( self ):
+        pass
+
     def __str__( self ):
         return self.get_full_desc()
 
@@ -69,12 +87,15 @@ class Inheritance( IMember ):
     def __init__( self, type, this_offset ):
         IMember.__init__( self, type, this_offset )
 
+    def _get_name( self ):
+        return '__inheritance'
+
     def is_moveable( self ):
         return False
 
     def get_brief_desc( self ):
-        return 'Inheritance ' \
-            + self.type.get_brief_desc() \
+        return self.get_name( 30 ) + ' ' \
+            + self.type.get_name( 30 ) \
             + ' [this+' + str( self.this_offset ) + ']'
 
 class Member( IMember ):
@@ -85,6 +106,9 @@ class Member( IMember ):
         self.file_id = file_id
         self.line_no = line_no
 
+    def _get_name( self ):
+        return self.name
+
     def is_moveable( self ):
         if self.name.startswith( '_vptr.' ):
             return False
@@ -93,32 +117,31 @@ class Member( IMember ):
 
     def get_brief_desc( self ):
         return \
-            abbrev( self.name, 30 ) \
-            + ' ' \
-            + self.type.get_brief_desc() \
+            self.get_name( 30 ) + ' ' \
+            + self.type.get_name( 30 ) \
             + ' [this+' + str( self.this_offset ) + ']'
 
     def get_full_desc( self ):
         return \
-            abbrev( self.name, 30 ) \
+            self.get_name( 30 ) + ' ' \
             + ' (' + str( self.file_id ) + ':' + str( self.line_no ) + ') ' \
-            + self.type.get_brief_desc() \
+            + self.type.get_name( 30 ) \
             + ' [this+' + str( self.this_offset ) + ']'
 
 class Padding( IMember ):
     def __init__( self, type, this_offset ):
         IMember.__init__( self, type, this_offset )
 
+    def _get_name( self ):
+        return '__padding'
+
     def is_moveable( self ):
         return True
 
     def get_brief_desc( self ):
-        return \
-            '\tpadding ' \
-            + self.type.get_brief_desc() \
+        return self.get_name( 30 ) + ' ' \
+            + self.type.get_name( 30 ) \
             + ' [this+' + str( self.this_offset ) + ']'
-
-
 
 #
 # Size
@@ -170,11 +193,16 @@ class IType( Visitable ):
     def set_name( self, name ):
         self.name = name
 
-    def get_name( self ):
-        return self._decorate_name( self._get_name() )
+    def get_name( self, width = None ):
+        if width == None:
+            return self._get_name()
+        else:
+            return self._decorate_name( \
+                abbrev( self._get_name(), width - self._get_decoration_size() ) )
 
-    def get_brief_name( self ):
-        return self._decorate_name( abbrev( self._get_name(), 30 ) )
+    def get_desc( self ):
+        return '[' + self.get_name() \
+            + ' (' + str( self.get_size() ) + ':' + str( self.get_alignment() ) + ')]'
 
     def set_size( self, size ):
         self.size.set( size )
@@ -184,13 +212,6 @@ class IType( Visitable ):
 
     def get_alignment( self ):
         return self.get_size()
-
-    def get_brief_desc( self ):
-        return '[' + self.get_brief_name() \
-            + ' (' + str( self.get_size() ) + ':' + str( self.get_alignment() ) + ')]'
-
-    def get_full_desc( self ):
-        return self.get_brief_desc()
 
     def get_is_compactable( self ):
         return False
@@ -202,6 +223,9 @@ class IType( Visitable ):
 
     def _decorate_name( self, name ):
         return name
+
+    def _get_decoration_size( self ):
+        return 0
 
 class UnknownType( IType ):
     def __init__( self ):
@@ -223,6 +247,9 @@ class PtrType( IType ):
     def _decorate_name( self, name ):
         return name + '*'
 
+    def _get_decoration_size( self ):
+        return 1
+
 class RefType( IType ):
     def __init__( self, type, size ):
         IType.__init__( self, 'Ref', size )
@@ -235,6 +262,9 @@ class RefType( IType ):
 
     def _decorate_name( self, name ):
         return name + '&'
+
+    def _get_decoration_size( self ):
+        return 1
 
 class BaseType( IType ):
     def __init__( self, name, size ):
@@ -249,11 +279,17 @@ class UnionType( IType ):
     def _decorate_name( self, name ):
         return 'u{' + name + '}'
 
+    def _get_decoration_size( self ):
+        return 3
+
 class ArrayType( IType ):
     def __init__( self, type ):
         IType.__init__( self, 'Array', None )
 
         self.type = type
+
+    def get_name( self, width = None ):
+        return self.type.get_name()
 
     def get_brief_desc( self ):
         if self.get_size() == None:
@@ -271,11 +307,11 @@ class ArrayType( IType ):
 
     # details
 
-    def _get_name( self ):
-        return self.type.get_name()
-
     def _decorate_name( self, name ):
-        return '[' + name + ']'
+        return self.get_name() + '[?]'
+
+    def _get_decoration_size( self ):
+        return 3
 
 class StructType( IType ):
     def __init__( self, name, size ):
@@ -284,6 +320,14 @@ class StructType( IType ):
         self.is_valid = True
 
         self.components = []
+
+        self.compacted = None
+
+    def set_compacted( self, compacted ):
+        self.compacted = compacted
+
+    def get_compacted( self ):
+        return self.compacted
 
     def get_alignment( self ):
         alignment = 1
@@ -341,7 +385,10 @@ class StructType( IType ):
     # details
 
     def _decorate_name( self, name ):
-        return 's{' + name + '}'
+        return '{' + name + '}'
+
+    def _get_decoration_size( self ):
+        return 2
 
 class EnumType( IType ):
     def __init__( self, name, size ):
@@ -352,20 +399,18 @@ class EnumType( IType ):
     def _decorate_name( self, name ):
         return 'e{' + name + '}'
 
+    def _get_decoration_size( self ):
+        return 3
+
 class PaddingType( IType ):
     def __init__( self, size ):
-        IType.__init__( self, 'Padding', size )
-
-    def get_brief_desc( self ):
-        return '[' + self.get_name() + ' (' + str( self.get_size() ) + ':1)]'
+        IType.__init__( self, None, size )
 
     def get_alignment( self ):
         return 1
 
-    # details
-
-    def _decorate_name( self, name ):
-        return 'p{' + name + '}'
+    def _get_name( self ):
+        return 'char[' + str( self.get_size() ) + ']'
 
 #
 # ITypeVisitor for IType hierarchy
@@ -423,7 +468,7 @@ class ITypeVisitor:
 class IMemberVisitor:
     def __init__( self ):
         self.dispatcher = {}
-        
+
         self.dispatcher[ Member ] = self.visit_member
         self.dispatcher[ Inheritance ] = self.visit_inheritance
         self.dispatcher[ Padding ] = self.visit_padding
@@ -433,16 +478,16 @@ class IMemberVisitor:
 
     def visit_member( self, member, * args ):
         return
-        
+
     def visit_inheritance( self, inheritance, * args ):
         return
-        
+
     def visit_padding( self, padding, * args ):
         return
-        
+
 #
 # CalculateTotalPaddingVisitor
-#        
+#
 class CalculateTotalPaddingVisitor( IMemberVisitor ):
     def __init__( self ):
         IMemberVisitor.__init__( self )
@@ -465,6 +510,73 @@ def calculate_total_padding( struct ):
 
     return total_padding_visitor.get_total_padding()
 
+#
+# PrintOutputVisitor
+#
+class PrintOutputVisitor( ITypeVisitor ):
+    def __init__( self ):
+        ITypeVisitor.__init__( self )
+
+    def visit_struct_type( self, struct, * args ):
+        if not struct.get_compacted():
+            return
+
+        self._print_struct( struct )
+
+        print( '\n' )
+
+    # details
+
+    def _print_struct( self, struct ):
+        width = 100
+
+        print( self._decorate_struct_name( struct.get_name() ) )
+
+        compacted_struct = struct.get_compacted()
+
+        members_size = len( struct.get_members() )
+        compacted_size = len( compacted_struct.get_members() )
+
+        for i in range( min( members_size, compacted_size ) ):
+            member = struct.get_members()[ i ]
+            compacted = compacted_struct.get_members()[ i ]
+
+            print( self._format( member, width // 2 ), '|', self._format( compacted, width // 2 ) )
+
+        if members_size == compacted_size:
+            return
+
+        if members_size > compacted_size:
+            for i in range( compacted_size, members_size ):
+                member = struct.get_members()[ i ]
+
+                print( \
+                    self._format( member, width // 2 ) \
+                    , '|' \
+                    , ( '{: <' + str( width // 2 ) + '}' ).format( '-' ) \
+                )
+
+        if members_size < compacted_size:
+            for i in range( members_size, compacted_size ):
+                compacted = compacted_struct.get_members()[ i ]
+
+                print( \
+                    ( '{: <' + str( width // 2 ) + '}' ).format( '-' ) \
+                    , '|' \
+                    , self._format( member, width // 2 ) \
+                )
+
+    def _decorate_struct_name( self, name ):
+        return '{' + name + '}'
+
+    def _format( self, member, width ):
+        return \
+            ('{: <' + str( ( width - 1 ) // 2 ) + '}').format( member.get_name( ( width - 1 ) // 2 ) )\
+            + ' ' \
+            + ('{: <' + str( width // 2 ) + '}').format( member.get_type().get_name( width // 2 ) )
+#
+# CompactStructVisitor
+#
 class CompactStructVisitor( ITypeVisitor ):
     def __init__( self ):
         ITypeVisitor.__init__( self )
@@ -476,7 +588,21 @@ class CompactStructVisitor( ITypeVisitor ):
         except Exception:
             struct.set_is_valid( False )
 
+        if self._skip_type( struct ):
+            return
+
+        struct.set_compacted( struct )
+
     # details
+
+    def _skip_type( self, struct ):
+        if is_template_name( struct.get_name() ):
+            return True
+
+        if is_stl_internal_name( struct.get_name() ):
+            return True
+
+        return False
 
     def _calculate_padding( self, struct ):
         if struct.get_is_valid() == False:
@@ -491,10 +617,7 @@ class CompactStructVisitor( ITypeVisitor ):
         for i in range( 0, len( members ) - 1 ):
             current = members[ i ]
             next = members[ i + 1 ]
-            try:
-                padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
-            except TypeError:
-                breakHere = True
+            padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
 
             if padding_size == 0:
                 members_with_padding.append( current )
@@ -630,11 +753,11 @@ class DIE:
 
     @staticmethod
     def is_template( die, dies ):
-        return DIE.get_name( die, dies ).count( '<' ) != 0
+        return is_template_name( DIE.get_name( die, dies ) )
 
     @staticmethod
     def is_stl( die, dies ):
-        return DIE.get_name( die, dies ).startswith( '_' )
+        return is_stl_internal_name( DIE.get_name( die, dies ) )
 
     @staticmethod
     def is_local_class( die ):
@@ -690,9 +813,9 @@ def skip_type( die, dies ):
     return False
 
 #
-# DIEConverter from DWARF/DIEs into abstract representation of types
+# DIEReader from DWARF/DIEs into abstract representation of types
 #
-class DIEConverter:
+class DIEReader:
     def __init__( self ):
         self.dies = {}
 
@@ -707,6 +830,8 @@ class DIEConverter:
 
         self._make_dies_mapping( dwarf_info )
         self._convert_die_to_structs( dwarf_info )
+
+        return self.types
 
     def get_types( self ):
         return self.types
@@ -875,37 +1000,49 @@ class DIEConverter:
             self._convert_die_to_structs_recursively( top_die )
 
 #
-# ClassCompacter
+# Application
 #
-class ClassCompacter:
+class Application:
     def __init__( self ):
         self.dies = {}
 
-        self.die_converter = DIEConverter()
+        self.die_reader = DIEReader()
 
-    def process_file( self, fileName ):
-        with open( fileName, 'rb' ) as file:
-            try:
-                elfFile = ELFFile( file )
-            except ELFError:
-                print( "Could not open ELF file: %s" % fileName )
-                return
-
-            self._process_DWARF( elfFile )
+    def process( self, file_name ):
+        types = self._read_DWARF( file_name )
+        types = self._compact_types( types )
+        self._print_result( types )
 
     # details
 
-    def _process_DWARF( self, elfFile ):
+    def _read_DWARF( self, file_name ):
+        with open( file_name, 'rb' ) as file:
+            try:
+                elfFile = ELFFile( file )
+            except ELFError:
+                print( "Could not open ELF file: %s" % file_name )
+            else:
+                return self._read_DWARF_impl( elfFile )
+
+    def _read_DWARF_impl( self, elfFile ):
         if not elfFile.has_dwarf_info():
-            print( "File %s has no DWARF info" % fileName )
+            print( "File %s has no DWARF info" % file_name )
             return
 
         dwarfInfo = elfFile.get_dwarf_info()
-        self.die_converter.process( dwarfInfo )
+        return self.die_reader.process( dwarfInfo )
 
-        self._compact_types()
+    def _get_types( self ):
+        return self.die_reader.get_types()
 
-        for id, type in self.die_converter.get_types().items():
+    def __print_result( self, types ):
+        print_output_visitor = PrintOutputVisitor()
+
+        for id, type in types.items():
+            type.accept( print_output_visitor, None )
+
+    def _print_result( self, types ):
+        for id, type in types.items():
             if type.get_name().count( '<' ) > 0:
                 continue
 
@@ -920,19 +1057,18 @@ class ClassCompacter:
 
             print( '%x %s' % ( id, type.get_full_desc() ) )
 
-    def _get_types( self ):
-        return self.die_converter.get_types()
-
-    def _compact_types( self ):
+    def _compact_types( self, types ):
         compact_struct_visitor = CompactStructVisitor()
 
-        for id, type in self._get_types().items():
+        for id, type in types.items():
             type.accept( compact_struct_visitor, None )
 
+        return types
+
 def main():
-    for fileName in sys.argv[1:]:
-        cc = ClassCompacter()
-        cc.process_file( fileName )
+    for file_name in sys.argv[1:]:
+        app = Application()
+        app.process( file_name )
 
 if __name__ == "__main__":
     main()
