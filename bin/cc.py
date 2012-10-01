@@ -16,9 +16,6 @@ from elftools.common.py3compat import bytes2str
 #
 # Utils
 #
-def print_map_pretty( map ):
-    for k, v in map.items():
-        print( "%d : %s" % ( k, v ) )
 
 def decode( values ):
     result = 0
@@ -34,9 +31,16 @@ def abbrev( text, length ):
     return text[0:length] + '...'
 
 #
+# Visitable
+#
+class Visitable:
+    def accept( self, visitor, * args ):
+        visitor.visit( self, * args )
+    
+#
 # Struct members representation
 #
-class Object:
+class IMember( Visitable ):
     def __init__( self, type, this_offset ):
         self.type = type
         self.this_offset = this_offset
@@ -61,9 +65,9 @@ class Object:
     def __str__( self ):
         return self.get_full_desc()
 
-class Inheritance( Object ):
+class Inheritance( IMember ):
     def __init__( self, type, this_offset ):
-        Object.__init__( self, type, this_offset )
+        IMember.__init__( self, type, this_offset )
 
     def is_moveable( self ):
         return False
@@ -73,9 +77,9 @@ class Inheritance( Object ):
             + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
 
-class Member( Object ):
+class Member( IMember ):
     def __init__( self, name, file_id, line_no, type, this_offset ):
-        Object.__init__( self, type, this_offset )
+        IMember.__init__( self, type, this_offset )
 
         self.name = name
         self.file_id = file_id
@@ -101,9 +105,9 @@ class Member( Object ):
             + self.type.get_brief_desc() \
             + ' [this+' + str( self.this_offset ) + ']'
 
-class Padding( Object ):
+class Padding( IMember ):
     def __init__( self, type, this_offset ):
-        Object.__init__( self, type, this_offset )
+        IMember.__init__( self, type, this_offset )
 
     def is_moveable( self ):
         return True
@@ -115,9 +119,6 @@ class Padding( Object ):
             + ' [this+' + str( self.this_offset ) + ']'
 
 
-class Visitable:
-    def accept( self, visitor, * args ):
-        visitor.visit( self, * args )
 
 #
 # Size
@@ -157,7 +158,7 @@ class UndefSize( Size ):
 #
 # Types representation
 #
-class Type( Visitable ):
+class IType( Visitable ):
     def __init__( self, name, size ):
         self.name = name
 
@@ -202,16 +203,16 @@ class Type( Visitable ):
     def _decorate_name( self, name ):
         return name
 
-class UnknownType( Type ):
+class UnknownType( IType ):
     def __init__( self ):
-        Type.__init__( self, 'unknown', None )
+        IType.__init__( self, 'unknown', None )
 
     def get_alignment( self ):
         return 8
 
-class PtrType( Type ):
+class PtrType( IType ):
     def __init__( self, type, size ):
-        Type.__init__( self, 'Ptr', size )
+        IType.__init__( self, 'Ptr', size )
         self.type = type
 
     # details
@@ -222,9 +223,9 @@ class PtrType( Type ):
     def _decorate_name( self, name ):
         return name + '*'
 
-class RefType( Type ):
+class RefType( IType ):
     def __init__( self, type, size ):
-        Type.__init__( self, 'Ref', size )
+        IType.__init__( self, 'Ref', size )
         self.type = type
 
     # details
@@ -235,22 +236,22 @@ class RefType( Type ):
     def _decorate_name( self, name ):
         return name + '&'
 
-class BaseType( Type ):
+class BaseType( IType ):
     def __init__( self, name, size ):
-        Type.__init__( self, name, size )
+        IType.__init__( self, name, size )
 
-class UnionType( Type ):
+class UnionType( IType ):
     def __init__( self, name, size ):
-        Type.__init__( self, name, size )
+        IType.__init__( self, name, size )
 
     # details
 
     def _decorate_name( self, name ):
         return 'u{' + name + '}'
 
-class ArrayType( Type ):
+class ArrayType( IType ):
     def __init__( self, type ):
-        Type.__init__( self, 'Array', None )
+        IType.__init__( self, 'Array', None )
 
         self.type = type
 
@@ -276,9 +277,9 @@ class ArrayType( Type ):
     def _decorate_name( self, name ):
         return '[' + name + ']'
 
-class StructType( Type ):
+class StructType( IType ):
     def __init__( self, name, size ):
-        Type.__init__( self, name, size )
+        IType.__init__( self, name, size )
 
         self.is_valid = True
 
@@ -342,18 +343,18 @@ class StructType( Type ):
     def _decorate_name( self, name ):
         return 's{' + name + '}'
 
-class EnumType( Type ):
+class EnumType( IType ):
     def __init__( self, name, size ):
-        Type.__init__( self, name, size )
+        IType.__init__( self, name, size )
 
     # details
 
     def _decorate_name( self, name ):
         return 'e{' + name + '}'
 
-class PaddingType( Type ):
+class PaddingType( IType ):
     def __init__( self, size ):
-        Type.__init__( self, 'Padding', size )
+        IType.__init__( self, 'Padding', size )
 
     def get_brief_desc( self ):
         return '[' + self.get_name() + ' (' + str( self.get_size() ) + ':1)]'
@@ -367,9 +368,9 @@ class PaddingType( Type ):
         return 'p{' + name + '}'
 
 #
-# Visitor for Type hierarchy
+# ITypeVisitor for IType hierarchy
 #
-class Visitor:
+class ITypeVisitor:
     def __init__( self ):
         self.dispatcher = {}
 
@@ -378,7 +379,6 @@ class Visitor:
         self.dispatcher[ RefType ] = self.visit_ref_type
         self.dispatcher[ BaseType ] = self.visit_base_type
         self.dispatcher[ UnionType ] = self.visit_union_type
-        #self.dispatcher[ DeclarationType ] = self.visit_declaration_type
         self.dispatcher[ ArrayType ] = self.visit_array_type
         self.dispatcher[ StructType ] = self.visit_struct_type
         self.dispatcher[ EnumType ] = self.visit_enum_type
@@ -417,13 +417,39 @@ class Visitor:
     def visit_padding_type( self, padding, * args ):
         return
 
-class CalculateTotalPaddingVisitor( Visitor ):
+#
+# IMemberVisitor
+#
+class IMemberVisitor:
     def __init__( self ):
-        Visitor.__init__( self )
+        self.dispatcher = {}
+        
+        self.dispatcher[ Member ] = self.visit_member
+        self.dispatcher[ Inheritance ] = self.visit_inheritance
+        self.dispatcher[ Padding ] = self.visit_padding
+
+    def visit( self, interface, * args ):
+        self.dispatcher[ interface.__class__ ]( interface, * args )
+
+    def visit_member( self, member, * args ):
+        return
+        
+    def visit_inheritance( self, inheritance, * args ):
+        return
+        
+    def visit_padding( self, padding, * args ):
+        return
+        
+#
+# CalculateTotalPaddingVisitor
+#        
+class CalculateTotalPaddingVisitor( IMemberVisitor ):
+    def __init__( self ):
+        IMemberVisitor.__init__( self )
 
         self.total_padding = 0
 
-    def visit_padding_type( self, padding, * args ):
+    def visit_padding( self, padding, * args ):
         self.total_padding += padding.get_size()
 
     def get_total_padding( self ):
@@ -435,13 +461,13 @@ def calculate_total_padding( struct ):
     total_padding_visitor = CalculateTotalPaddingVisitor()
 
     for member in members:
-        member.get_type().accept( total_padding_visitor )
+        member.accept( total_padding_visitor )
 
     return total_padding_visitor.get_total_padding()
 
-class CompactStructVisitor( Visitor ):
+class CompactStructVisitor( ITypeVisitor ):
     def __init__( self ):
-        Visitor.__init__( self )
+        ITypeVisitor.__init__( self )
 
     def visit_struct_type( self, struct, * args ):
         try:
