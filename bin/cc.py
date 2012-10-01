@@ -326,7 +326,7 @@ class StructType( IType ):
     def set_compacted( self, compacted ):
         self.compacted = compacted
 
-    def get_compacted( self ):
+    def get_packed( self ):
         return self.compacted
 
     def get_alignment( self ):
@@ -411,6 +411,77 @@ class PaddingType( IType ):
 
     def _get_name( self ):
         return 'char[' + str( self.get_size() ) + ']'
+
+#
+# resolve_members_type_size
+#
+def resolve_members_type_size( struct ):
+    if struct.get_is_valid() == False:
+        return
+
+    members = struct.get_members()
+
+    if len( members ) == 0:
+        return
+
+    # resolve all but last
+    for i in range( 0, len( members ) -1 ):
+        current = members[ i ]
+        next = members[ i + 1 ]
+        type_size = next.get_this_offset() - current.get_this_offset()
+
+        current.get_type().set_size( type_size )
+
+    # resolve last
+    current = members[ -1 ]
+    type_size = struct.get_size() - current.get_this_offset()
+
+    current.get_type().set_size( type_size )
+
+#
+# find_and_create_padding_members
+#
+def find_and_create_padding_members( struct ):
+    if struct.get_is_valid() == False:
+        return
+
+    members = struct.get_members()
+    members_with_padding = []
+
+    if len( members ) == 0:
+        return
+
+    for i in range( 0, len( members ) - 1 ):
+        current = members[ i ]
+        next = members[ i + 1 ]
+        padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
+
+        if padding_size == 0:
+            members_with_padding.append( current )
+        elif padding_size > 0:
+            members_with_padding.append( current )
+
+            padding_this_offset = current.get_this_offset() + current.get_size()
+            padding = Padding( PaddingType( padding_size ), padding_this_offset )
+            members_with_padding.append( padding )
+        else:
+            raise Exception( 'EBO for type %s' % struct.get_name() )
+
+    current = members[ -1 ]
+    padding_size = struct.get_size() - current.get_this_offset() - current.get_size()
+
+    if padding_size == 0:
+        members_with_padding.append( current )
+    elif padding_size > 0:
+        members_with_padding.append( current )
+
+        padding_this_offset = current.get_this_offset() + current.get_size()
+        padding = Padding( PaddingType( padding_size ), padding_this_offset )
+        members_with_padding.append( padding )
+    else:
+        raise Exception( 'EBO for type %s' % struct.get_name() )
+
+    struct.set_members( members_with_padding )
 
 #
 # ITypeVisitor for IType hierarchy
@@ -510,70 +581,62 @@ def calculate_total_padding( struct ):
 
     return total_padding_visitor.get_total_padding()
 
+
+def print_diff_of_struct_and_packed_struct( struct, packed ):
+    def _format( member, width ):
+        member_name = member.get_name( ( width - 1 ) // 2 )
+        type_name = member.get_type().get_name( width // 2 )
+
+        return \
+            ('{: <' + str( ( width - 1 ) // 2 ) + '}').format( member_name ) \
+            + ' ' \
+            + ('{: <' + str( width // 2 ) + '}').format( type_name )
+
+    width = 50
+
+    print( '{' + struct.get_name() + '}' )
+
+    members_size = len( struct.get_members() )
+    compacted_size = len( packed.get_members() )
+
+    # member type          | member type
+    for i in range( min( members_size, compacted_size ) ):
+        member = struct.get_members()[ i ]
+        compacted = packed.get_members()[ i ]
+        print( _format( member, width ), '|', _format( compacted, width ) )
+
+    if members_size == compacted_size:
+        return
+
+    empty_member_string = ( '{: <' + str( width ) + '}' ).format( '-' )
+
+    # member type          | -
+    if members_size > compacted_size:
+        for i in range( compacted_size, members_size ):
+            member = struct.get_members()[ i ]
+            print( _format( member, width ), '|', empty_member_string )
+
+    # -                    | member type
+    if members_size < compacted_size:
+        for i in range( members_size, compacted_size ):
+            compacted = compacted_struct.get_members()[ i ]
+            print( empty_member_string, '|', _format( compacted, width ) )
+
 #
-# PrintOutputVisitor
+# PrintDiffOfStructAndPackedStruct
 #
-class PrintOutputVisitor( ITypeVisitor ):
+class PrintDiffOfStructAndPackedStruct( ITypeVisitor ):
     def __init__( self ):
         ITypeVisitor.__init__( self )
 
     def visit_struct_type( self, struct, * args ):
-        if not struct.get_compacted():
+        if not struct.get_packed():
             return
 
-        self._print_struct( struct )
+        print_diff_of_struct_and_packed_struct( struct, struct.get_packed() )
 
         print( '\n' )
 
-    # details
-
-    def _print_struct( self, struct ):
-        width = 100
-
-        print( self._decorate_struct_name( struct.get_name() ) )
-
-        compacted_struct = struct.get_compacted()
-
-        members_size = len( struct.get_members() )
-        compacted_size = len( compacted_struct.get_members() )
-
-        for i in range( min( members_size, compacted_size ) ):
-            member = struct.get_members()[ i ]
-            compacted = compacted_struct.get_members()[ i ]
-
-            print( self._format( member, width // 2 ), '|', self._format( compacted, width // 2 ) )
-
-        if members_size == compacted_size:
-            return
-
-        if members_size > compacted_size:
-            for i in range( compacted_size, members_size ):
-                member = struct.get_members()[ i ]
-
-                print( \
-                    self._format( member, width // 2 ) \
-                    , '|' \
-                    , ( '{: <' + str( width // 2 ) + '}' ).format( '-' ) \
-                )
-
-        if members_size < compacted_size:
-            for i in range( members_size, compacted_size ):
-                compacted = compacted_struct.get_members()[ i ]
-
-                print( \
-                    ( '{: <' + str( width // 2 ) + '}' ).format( '-' ) \
-                    , '|' \
-                    , self._format( member, width // 2 ) \
-                )
-
-    def _decorate_struct_name( self, name ):
-        return '{' + name + '}'
-
-    def _format( self, member, width ):
-        return \
-            ('{: <' + str( ( width - 1 ) // 2 ) + '}').format( member.get_name( ( width - 1 ) // 2 ) )\
-            + ' ' \
-            + ('{: <' + str( width // 2 ) + '}').format( member.get_type().get_name( width // 2 ) )
 #
 # CompactStructVisitor
 #
@@ -583,8 +646,8 @@ class CompactStructVisitor( ITypeVisitor ):
 
     def visit_struct_type( self, struct, * args ):
         try:
-            self._resolve_type_size( struct )
-            self._calculate_padding( struct )
+            resolve_members_type_size( struct )
+            find_and_create_padding_members( struct )
         except Exception:
             struct.set_is_valid( False )
 
@@ -604,70 +667,6 @@ class CompactStructVisitor( ITypeVisitor ):
 
         return False
 
-    def _calculate_padding( self, struct ):
-        if struct.get_is_valid() == False:
-            return
-
-        members = struct.get_members()
-        members_with_padding = []
-
-        if len( members ) == 0:
-            return
-
-        for i in range( 0, len( members ) - 1 ):
-            current = members[ i ]
-            next = members[ i + 1 ]
-            padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
-
-            if padding_size == 0:
-                members_with_padding.append( current )
-            elif padding_size > 0:
-                members_with_padding.append( current )
-
-                padding_this_offset = current.get_this_offset() + current.get_size()
-                padding = Padding( PaddingType( padding_size ), padding_this_offset )
-                members_with_padding.append( padding )
-            else:
-                raise Exception( 'EBO for type %s' % struct.get_name() )
-
-        current = members[ -1 ]
-        padding_size = struct.get_size() - current.get_this_offset() - current.get_size()
-
-        if padding_size == 0:
-            members_with_padding.append( current )
-        elif padding_size > 0:
-            members_with_padding.append( current )
-
-            padding_this_offset = current.get_this_offset() + current.get_size()
-            padding = Padding( PaddingType( padding_size ), padding_this_offset )
-            members_with_padding.append( padding )
-        else:
-            raise Exception( 'EBO for type %s' % struct.get_name() )
-
-        struct.set_members( members_with_padding )
-
-    def _resolve_type_size( self, struct ):
-        if struct.get_is_valid() == False:
-            return
-
-        members = struct.get_members()
-
-        if len( members ) == 0:
-            return
-
-        # resolve all but last
-        for i in range( 0, len( members ) -1 ):
-            current = members[ i ]
-            next = members[ i + 1 ]
-            type_size = next.get_this_offset() - current.get_this_offset()
-
-            current.get_type().set_size( type_size )
-
-        # resolve last
-        current = members[ -1 ]
-        type_size = struct.get_size() - current.get_this_offset()
-
-        current.get_type().set_size( type_size )
 
 #
 # Utils for DIE
@@ -1011,7 +1010,7 @@ class Application:
     def process( self, file_name ):
         types = self._read_DWARF( file_name )
         types = self._compact_types( types )
-        self._print_result( types )
+        self.__print_result( types )
 
     # details
 
@@ -1036,7 +1035,7 @@ class Application:
         return self.die_reader.get_types()
 
     def __print_result( self, types ):
-        print_output_visitor = PrintOutputVisitor()
+        print_output_visitor = PrintDiffOfStructAndPackedStruct()
 
         for id, type in types.items():
             type.accept( print_output_visitor, None )
