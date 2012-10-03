@@ -34,22 +34,22 @@ def abbrev( text, length ):
     return text[0:length-3] + '...'
 
 def is_template_name( text ):
-    return text.count( '<' ) != 0
+    return text.find( '<' ) != -1
 
 def is_stl_internal_name( text ):
     return text.startswith( '_' )
 
 #
-# Visitable
+# IVisitable
 #
-class Visitable:
+class IVisitable:
     def accept( self, visitor, * args ):
         visitor.visit( self, * args )
 
 #
 # Struct members representation
 #
-class IMember( Visitable ):
+class IMember( IVisitable ):
     def __init__( self, type, this_offset ):
         self.type = type
         self.this_offset = this_offset
@@ -181,7 +181,7 @@ class UndefSize( Size ):
 #
 # Types representation
 #
-class IType( Visitable ):
+class IType( IVisitable ):
     def __init__( self, name, size ):
         self.name = name
 
@@ -442,6 +442,10 @@ def resolve_members_type_size( struct ):
 # find_and_create_padding_members
 #
 def find_and_create_padding_members( struct ):
+    def _create_padding( previous_member, padding_size ):
+        padding_this_offset = previous_member.get_this_offset() + previous_member.get_size()
+        return Padding( PaddingType( padding_size ), padding_this_offset )
+
     if struct.get_is_valid() == False:
         return
 
@@ -460,10 +464,7 @@ def find_and_create_padding_members( struct ):
             members_with_padding.append( current )
         elif padding_size > 0:
             members_with_padding.append( current )
-
-            padding_this_offset = current.get_this_offset() + current.get_size()
-            padding = Padding( PaddingType( padding_size ), padding_this_offset )
-            members_with_padding.append( padding )
+            members_with_padding.append( _create_padding( current, padding_size ) )
         else:
             raise Exception( 'EBO for type %s' % struct.get_name() )
 
@@ -474,10 +475,7 @@ def find_and_create_padding_members( struct ):
         members_with_padding.append( current )
     elif padding_size > 0:
         members_with_padding.append( current )
-
-        padding_this_offset = current.get_this_offset() + current.get_size()
-        padding = Padding( PaddingType( padding_size ), padding_this_offset )
-        members_with_padding.append( padding )
+        members_with_padding.append( _create_padding( current, padding_size ) )
     else:
         raise Exception( 'EBO for type %s' % struct.get_name() )
 
@@ -581,8 +579,35 @@ def calculate_total_padding( struct ):
 
     return total_padding_visitor.get_total_padding()
 
+#
+# IsDerivedClassVisitor
+#
+class IsDerivedClassVisitor( IMemberVisitor ):
+    def __init__( self ):
+        IMemberVisitor.__init__( self )
 
-def print_diff_of_struct_and_packed_struct( struct, packed ):
+        self.is_derived_class = False
+
+    def visit_inheritance( self, padding, * args ):
+        self.is_derived_class = True
+
+    def get_is_base_class( self ):
+        return self.is_derived_class
+
+def is_derived_class( struct ):
+    members = struct.get_members()
+
+    is_base_class_visitor = IsDerivedClassVisitor()
+
+    for member in members:
+        member.accept( is_base_class_visitor )
+
+        if is_base_class_visitor.get_is_base_class():
+            return True
+
+    return False
+
+def print_diff_of_structs( struct1, struct2 ):
     def _format( member, width ):
         member_name = member.get_name( ( width - 1 ) // 2 )
         type_name = member.get_type().get_name( width // 2 )
@@ -594,16 +619,16 @@ def print_diff_of_struct_and_packed_struct( struct, packed ):
 
     width = 50
 
-    print( '{' + struct.get_name() + '}' )
+    print( '{' + struct1.get_name() + '}' )
 
-    members_size = len( struct.get_members() )
-    compacted_size = len( packed.get_members() )
+    members_size = len( struct1.get_members() )
+    compacted_size = len( struct2.get_members() )
 
     # member type          | member type
     for i in range( min( members_size, compacted_size ) ):
-        member = struct.get_members()[ i ]
-        compacted = packed.get_members()[ i ]
-        print( _format( member, width ), '|', _format( compacted, width ) )
+        member1 = struct1.get_members()[ i ]
+        member2 = struct2.get_members()[ i ]
+        print( _format( member1, width ), '|', _format( member2, width ) )
 
     if members_size == compacted_size:
         return
@@ -613,14 +638,14 @@ def print_diff_of_struct_and_packed_struct( struct, packed ):
     # member type          | -
     if members_size > compacted_size:
         for i in range( compacted_size, members_size ):
-            member = struct.get_members()[ i ]
-            print( _format( member, width ), '|', empty_member_string )
+            member1 = struct1.get_members()[ i ]
+            print( _format( member1, width ), '|', empty_member_string )
 
     # -                    | member type
     if members_size < compacted_size:
         for i in range( members_size, compacted_size ):
-            compacted = compacted_struct.get_members()[ i ]
-            print( empty_member_string, '|', _format( compacted, width ) )
+            member2 = struct2.get_members()[ i ]
+            print( empty_member_string, '|', _format( member2, width ) )
 
 #
 # PrintDiffOfStructAndPackedStruct
@@ -633,9 +658,243 @@ class PrintDiffOfStructAndPackedStruct( ITypeVisitor ):
         if not struct.get_packed():
             return
 
-        print_diff_of_struct_and_packed_struct( struct, struct.get_packed() )
+        print_diff_of_structs( struct, struct.get_packed() )
 
         print( '\n' )
+
+#
+# INode
+#
+class INode( IVisitable ):
+    def __init__( self ):
+        self.next = None
+
+class HeadNode( INode ):
+    def __init__( self ):
+        INode.__init__( self )
+
+class InheritanceNode( INode ):
+    def __init__( self, inheritance ):
+        INode.__init__( self )
+
+        self.inheritance = inheritance
+
+class MemberNode( INode ):
+    def __init__( self, member ):
+        INode.__init__( self )
+
+        self.member = member
+
+    def get_type( self ):
+        return self.member.get_type()
+
+class PaddingNode( INode ):
+    def __init__( self, padding ):
+        INode.__init__( self )
+
+        self.this_offset = padding.get_this_offset()
+        self.size = padding.get_size()
+
+    def get_size( self ):
+        return self.size
+
+    def set_size( self, size ):
+        self.size = size
+
+#
+# INodeVisitor
+#
+class INodeVisitor:
+    def __init__( self ):
+        self.dispatcher = {}
+
+        self.dispatcher[ MemberNode ] = self.visit_member_node
+        self.dispatcher[ InheritanceNode ] = self.visit_inheritance_node
+        self.dispatcher[ PaddingNode ] = self.visit_padding_node
+
+    def visit( self, node, * args ):
+        self.dispatcher[ node.__class__ ]( node, * args )
+
+    def visit_member_node( self, member, * args ):
+        return
+
+    def visit_inheritance_node( self, inheritance, * args ):
+        return
+
+    def visit_padding_node( self, padding, * args ):
+        return
+
+#
+# TypesToNodesConversionVisitor
+#
+class TypesToNodesConversionVisitor( IMemberVisitor ):
+    def __init__( self ):
+        IMemberVisitor.__init__( self )
+
+        self.node = None
+
+    def visit_inheritance( self, inheritance, * args ):
+        self.node = InheritanceNode( inheritance )
+
+    def visit_member( self, member, * args ):
+        self.node = MemberNode( member )
+
+    def visit_padding( self, padding, * args ):
+        self.node = PaddingNode( padding )
+
+    def get_node( self ):
+        return self.node
+
+#
+# FindPaddingVisitor
+#
+class FindPaddingVisitor( INodeVisitor ):
+    def __init__( self, size, alignment ):
+        INodeVisitor.__init__( self )
+
+        self.size = size
+        self.alignment = alignment
+
+        self.padding = None
+
+    def visit_padding_node( self, padding, * args ):
+        if padding.get_size() >= self.size:
+            self.padding = padding
+
+    def get_padding( self ):
+        return self.padding
+
+#
+# MembersList
+#
+class MembersList:
+    def __init__( self ):
+        self.members_head = HeadNode()
+        self.members_tail = HeadNode()
+
+        #self.padding_head = HeadNode()
+        #self.padding_tail = HeadNode()
+
+#
+# StructCompacter
+#
+class StructCompacter:
+    def __init__( self ):
+        self.types_to_nodes_conversion_visitor = TypesToNodesConversionVisitor()
+
+        self.members_list = MembersList()
+
+        self.dispatcher = {}
+
+        self._init_dispatcher()
+
+    def process( self, struct ):
+        if calculate_total_padding( struct ) < struct.get_alignment():
+            return None
+
+        if is_derived_class( struct ):
+            return None
+
+        if struct.get_name() != 'FareClassAppSegInfo':
+            return None
+
+        for member in struct.get_members():
+            tail = self.members_list.members_tail
+            node = self._convert_to_node( member )
+
+            self.dispatcher[ ( tail.__class__, node.__class__ ) ]( None, node )
+
+        return struct
+
+    def _init_dispatcher( self ):
+        self.dispatcher[ ( HeadNode, InheritanceNode ) ] = self._process_head_inheritance
+        self.dispatcher[ ( HeadNode, MemberNode ) ] = self._process_head_member
+        self.dispatcher[ ( HeadNode, PaddingNode ) ] = self._process_head_padding
+
+        self.dispatcher[ ( InheritanceNode, InheritanceNode ) ] = self._process_inheritance_inheritance
+        self.dispatcher[ ( InheritanceNode, MemberNode ) ] = self._process_inheritance_member
+        self.dispatcher[ ( InheritanceNode, PaddingNode ) ] = self._process_inheritance_padding
+
+        self.dispatcher[ ( MemberNode, MemberNode ) ] = self._process_member_member
+        self.dispatcher[ ( MemberNode, PaddingNode ) ] = self._process_member_padding
+
+        self.dispatcher[ ( PaddingNode, MemberNode ) ] = self._process_padding_member
+        self.dispatcher[ ( PaddingNode, PaddingNode ) ] = self._process_padding_padding
+
+    def _process_padding_padding( self, padding1, padding2 ):
+        tail = self.members_list.members_tail
+        oldSize = tail.get_size()
+        newSize = tail.get_size() + padding2.get_size()
+
+        tail.set_size( newSize )
+
+    def _process_padding_member( self, padding, member ):
+        size = member2.get_type().get_size()
+        alignment = member2.get_type().get_alignment()
+        padding_node = self._find_padding( size, alignment )
+        tail = self.members_list.members_tail
+
+        if padding_node == None:
+            tail.next = member
+            return
+
+        new_padding_node = PaddingNode( Padding( PaddingType( size ), 0 ) )
+        self.dispatcher[ ( tail.__class__, padding_node.__class__ ) ]( None, new_padding_node )
+
+    def _process_member_padding( self, member, padding ):
+        self.members_list.members_tail.next = padding
+
+    def _process_member_member( self, member_tail, member2 ):
+        size = member2.get_type().get_size()
+        alignment = member2.get_type().get_alignment()
+        padding_node = self._find_padding( size, alignment )
+        tail = self.members_list.members_tail
+
+        if padding_node == None:
+            tail.next = member2
+            return
+
+        new_padding_node = PaddingNode( Padding( PaddingType( size ), 0 ) )
+        self.dispatcher[ ( tail.__class__, padding_node.__class__ ) ]( None, new_padding_node )
+
+    def _process_inheritance_padding( self, inheritance, padding ):
+        print( '_process_inheritance_padding' )
+
+    def _process_inheritance_inheritance( self, inheritance1, inheritance2 ):
+        print( '_process_inheritance_inheritance' )
+
+    def _process_inheritance_member( self, inheritance, member ):
+        print( '_process_inheritance_member' )
+
+    def _process_head_inheritance( self, head, inheritance ):
+        print( '_process_head_inheritance' )
+
+    def _process_head_member( self, head, member ):
+        self.members_list.members_head = member
+        self.members_list.members_tail = member
+
+    def _process_head_padding( self, head, padding ):
+        self.members_list.members_head = padding
+        self.members_list.members_tail = padding        
+
+    def _convert_to_node( self, member ):
+        member.accept( self.types_to_nodes_conversion_visitor )
+        return self.types_to_nodes_conversion_visitor.get_node()
+
+    def _find_padding( self, size, alignment ):
+        find_padding_visitor = FindPaddingVisitor( size, alignment )
+
+        member = self.members_list.members_head
+
+        while member:
+            member.accept( find_padding_visitor )
+
+            if find_padding_visitor.get_padding():
+                return find_padding_visitor.get_padding()
+
+            member = member.next
+
+        return None
 
 #
 # CompactStructVisitor
@@ -654,7 +913,11 @@ class CompactStructVisitor( ITypeVisitor ):
         if self._skip_type( struct ):
             return
 
-        struct.set_compacted( struct )
+        struct_compacter = StructCompacter()
+
+        compacted = struct_compacter.process( struct )
+
+        struct.set_compacted( compacted )
 
     # details
 
@@ -666,7 +929,6 @@ class CompactStructVisitor( ITypeVisitor ):
             return True
 
         return False
-
 
 #
 # Utils for DIE
@@ -793,24 +1055,6 @@ class DIE:
 
         return result
 
-def skip_type( die, dies ):
-    if DIE.is_declaration( die ):
-        return True
-
-    if DIE.is_stl( die, dies ):
-        return True
-
-    if DIE.is_template( die, dies ):
-        return True
-
-    if DIE.is_local_class( die ):
-        return True
-
-    if DIE.get_name( die, dies ) == 'anonymous':
-        return True
-
-    return False
-
 #
 # DIEReader from DWARF/DIEs into abstract representation of types
 #
@@ -840,12 +1084,6 @@ class DIEReader:
     def _get_ptr_size( self, dwarf_info ):
         for cu in dwarf_info.iter_CUs():
             return cu[ 'address_size' ]
-
-    def _decode_type_name( self, type_id ):
-        return self._resolve_type( type_id ).get_brief_desc()
-
-    def _decode_file_name( self, file_id ):
-        return 'main.cpp'
 
     def _create_unknown_type( self, die ):
         unknown_type = UnknownType()
