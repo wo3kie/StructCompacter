@@ -675,7 +675,10 @@ def print_diff_of_structs( struct1, struct2 ):
 
     width = 50
 
-    print( '{' + struct1.get_name() + '}' )
+    struct_name = struct1.get_name()
+    struct1_size = str( struct1.get_size() )
+    struct2_size = str( struct2.get_size() )
+    print( '{' + struct_name + '}(' + struct1_size + '/' + struct2_size + ')' )
 
     members_size = len( struct1.get_members() )
     compacted_size = len( struct2.get_members() )
@@ -737,6 +740,16 @@ class HeadNode( INode ):
 
     def __str__( self ):
         return 'Head'
+
+class EndNode( INode ):
+    def __init__( self ):
+        INode.__init__( self, 'End', EmptyType(), None )
+
+    def get_this_offset( self ):
+        return 0
+
+    def __str__( self ):
+        return 'End'
 
 class InheritanceNode( INode ):
     def __init__( self, type, this_offset ):
@@ -891,12 +904,24 @@ class StructCompacter:
         #if struct.get_name() != 'TicketingFeesInfo':
         #    return None
 
-        return self._process_impl( struct )
+        self._pack_members( struct )
+
+        packed_struct_size \
+            = self.members_tail.get_this_offset() + self.members_tail.get_type().get_size()
+        
+        if struct.get_size() == packed_struct_size:
+            return None
+        
+        result = StructType( struct.get_name(), packed_struct_size )
+        result.set_alignment( struct.get_alignment() )
+        result.set_members( StructCompacter._convert_nodes_to_members( self.members_head.next ) )
+
+        return result
 
     def dispatch( self, object1, object2 ):
         self.dispatcher[ ( object1.__class__, object2.__class__ ) ]( object1, object2 )
 
-    def _process_impl( self, struct ):
+    def _pack_members( self, struct ):
         self.struct = struct
 
         for member in struct.get_members():
@@ -907,12 +932,7 @@ class StructCompacter:
 
             #StructCompacter._print( node, self.members_head.next )
 
-        result = StructType( struct.get_name(), None )
-
-        members = StructCompacter._convert_nodes_to_members( self.members_head.next )
-        result.set_members( members )
-
-        return result
+        self.dispatch( self.members_tail, EndNode() )
 
     @staticmethod
     def _convert_from_node( node ):
@@ -957,6 +977,37 @@ class StructCompacter:
 
         self.dispatcher[ ( PaddingNode, MemberNode ) ] = self._process_padding_member
         self.dispatcher[ ( PaddingNode, PaddingNode ) ] = self._process_padding_padding
+
+        self.dispatcher[ ( InheritanceNode, EndNode ) ] = self._process_inheritance_end
+        self.dispatcher[ ( MemberNode, EndNode ) ] = self._process_member_end
+        self.dispatcher[ ( PaddingNode, EndNode ) ] = self._process_padding_end
+
+    def _process_inheritance_end( self, tail, end ):
+        pass
+
+    def _process_member_end( self, tail, end ):
+        struct_end = tail.get_this_offset() + tail.get_type().get_size()
+        aligned_struct_end = Alignment.get_aligned_up( struct_end, self.struct.get_alignment() )
+
+        back_padding_size = aligned_struct_end - struct_end
+
+        if back_padding_size == 0:
+            return
+
+        back_padding = PaddingNode( PaddingType( back_padding_size ), struct_end )
+        self._append_node_to_list( back_padding )
+
+    def _process_padding_end( self, tail, end ):
+        back_padding_this_offset = tail.get_this_offset()
+        aligned_struct_end \
+            = Alignment.get_aligned_up( back_padding_this_offset, self.struct.get_alignment() )
+
+        back_padding_new_size = aligned_struct_end - back_padding_this_offset
+
+        if back_padding_new_size == 0:
+            self._pop_back_node_from_list()
+        elif tail.get_type().get_size() != back_padding_new_size:
+            tail.set_size( back_padding_new_size )
 
     def _process_padding_padding( self, tail, padding ):
         new_padding_size = tail.get_type().get_size() + padding.get_type().get_size()
