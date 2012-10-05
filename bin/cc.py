@@ -888,7 +888,7 @@ class StructCompacter:
         self.type_to_node_conversion_visitor = TypesToNodesConversionVisitor()
 
         self.members_head = HeadNode()
-        self.members = self.members_head
+        self.members_back = self.members_head
 
         self._init_dispatcher()
 
@@ -913,7 +913,7 @@ class StructCompacter:
             self._pack_members()
 
             packed_struct_size \
-                = self.members.get_this_offset() + self.members.get_type().get_size()
+                = self.__back().get_this_offset() + self.__back().get_type().get_size()
 
             if struct.get_size() == packed_struct_size:
                 return None
@@ -930,16 +930,9 @@ class StructCompacter:
     def dispatch( self, object1, object2 ):
         self.dispatcher[ ( object1.__class__, object2.__class__ ) ]( object1, object2 )
 
-    def _pack_members( self ):
-        for member in self.struct.get_members():
-            tail = self.members
-            node = self._convert_to_node( member )
-
-            self.dispatch( tail, node )
-
-            #StructCompacter._print( node, self.members_head.next )
-
-        self.dispatch( self.members, EndNode() )
+    #
+    # conversions between external and internal data structures
+    #
 
     @staticmethod
     def _convert_from_node( node ):
@@ -958,15 +951,13 @@ class StructCompacter:
 
         return members
 
-    @staticmethod
-    def _print( node, head ):
-        print( '+{', str( node ), '}' )
+    def _convert_to_node( self, member ):
+        member.accept( self.type_to_node_conversion_visitor )
+        return self.type_to_node_conversion_visitor.get_node()
 
-        while head:
-            print( str( head ) )
-            head = head.next
-
-        print( '\n' )
+    #
+    # callbacks
+    #
 
     def _init_dispatcher( self ):
         self.dispatcher = {}
@@ -1002,7 +993,7 @@ class StructCompacter:
             return
 
         back_padding = PaddingNode( PaddingType( back_padding_size ), struct_end )
-        self._append_node_to_list( back_padding )
+        self._add_unaligned_member( back_padding )
 
     def _process_padding_end( self, tail, end ):
         back_padding_this_offset = tail.get_this_offset()
@@ -1012,32 +1003,33 @@ class StructCompacter:
         back_padding_new_size = aligned_struct_end - back_padding_this_offset
 
         if back_padding_new_size == 0:
-            self._pop_back_node_from_list()
+            self.__pop_back()
         elif tail.get_type().get_size() != back_padding_new_size:
             tail.set_size( back_padding_new_size )
 
     def _process_padding_padding( self, tail, padding ):
-        new_padding_size = tail.get_type().get_size() + padding.get_type().get_size()
-        reduced_new_padding_size = self._reduce_padding_size( new_padding_size )
+        total_padding_size = tail.get_type().get_size() + padding.get_type().get_size()
+        total_padding_size = total_padding_size % self.struct.get_alignment()
 
-        tail.set_size( reduced_new_padding_size )
+        tail.set_size( total_padding_size )
 
     def _process_padding_member( self, tail, member ):
         member_size = member.get_type().get_size()
         member_alignment = member.get_type().get_alignment()
 
-        padding_node = StructCompacter._find_padding( self.members_head, member_size, member_alignment )
+        padding_node \
+            = StructCompacter._find_padding( self.members_head, member_size, member_alignment )
 
         if padding_node != None:
             self._move_member_into_padding( padding_node, member )
         elif self._try_shrink_padding_right( tail, member ):
             return
         else:
-            self._append_node_to_list( member )
+            self._add_unaligned_member( member )
 
     def _process_member_padding( self, tail, padding ):
-        padding.set_this_offset( self._get_next_aligned_this_offset( padding.get_type().get_alignment() ) )
-        self._append_node_to_list( padding )
+        padding.set_this_offset( self._get_aligned_struct_size( padding.get_type().get_alignment() ) )
+        self._add_unaligned_member( padding )
 
     def _process_member_member( self, tail, member ):
         member_size = member.get_type().get_size()
@@ -1045,118 +1037,109 @@ class StructCompacter:
         padding_node = self._find_padding( self.members_head, member_size, member_alignment )
 
         if padding_node == None:
-            self._append_node_to_list( member )
+            self._add_unaligned_member( member )
         else:
             self._move_member_into_padding( padding_node, member )
 
     def _process_inheritance_padding( self, tail, padding ):
-        padding.set_this_offset( self._get_next_aligned_this_offset( padding.get_type().get_alignment() ) )
-        self._append_node_to_list( padding )
+        padding.set_this_offset( self._get_aligned_struct_size( padding.get_type().get_alignment() ) )
+        self._add_unaligned_member( padding )
 
     def _process_inheritance_inheritance( self, tail, inheritance ):
-        self._append_node_to_list( inheritance )
+        self._add_unaligned_member( inheritance )
 
     def _process_inheritance_member( self, tail, member ):
-        self._append_node_to_list( member )
+        self._add_unaligned_member( member )
 
     def _process_head_inheritance( self, tail, inheritance ):
         inheritance.set_this_offset( 0 )
-        self._append_node_to_list( inheritance )
+        self._add_unaligned_member( inheritance )
 
     def _process_head_member( self, tail, member ):
         member.set_this_offset( 0 )
-        self._append_node_to_list( member )
+        self._add_unaligned_member( member )
 
     def _process_head_padding( self, tail, padding ):
         member.set_this_offset( 0 )
-        self._append_node_to_list( padding )
+        self._add_unaligned_member( padding )
+
+    #
+    # details
+    #
+
+    def _pack_members( self ):
+        for member in self.struct.get_members():
+            tail = self.__back()
+            node = self._convert_to_node( member )
+
+            self.dispatch( tail, node )
+
+            #StructCompacter._print( node, self.members_head.next )
+
+        self.dispatch( self.__back(), EndNode() )
 
     def _try_shrink_padding_right( self, padding, member ):
         if Alignment.is_aligned( padding.get_this_offset(), member.get_type().get_alignment() ):
-            self._pop_back_node_from_list()
-            self._append_node_to_list( member )
-            return True
-
-        if padding.get_type().get_size() < member.get_type().get_alignment():
+            self.__pop_back()
+        elif padding.get_type().get_size() < member.get_type().get_alignment():
             return False
+        else:
+            padding.set_size( padding.get_type().get_size() % member.get_type().get_alignment() )
 
-        padding.set_size( padding.get_type().get_size() % member.get_type().get_alignment() )
-        self._append_node_to_list( member )
+        self._add_unaligned_member( member )
 
         return True
 
-    def _get_next_aligned_this_offset( self, alignment ):
-        last_member = self.members
+    def _get_aligned_struct_size( self, alignment ):
+        struct_size = self.__back().get_this_offset() + self.__back().get_type().get_size()
+        aligned_struct_size = Alignment.get_aligned_up( struct_size, alignment )
 
-        this_offset = last_member.get_this_offset() + last_member.get_type().get_size()
-        aligned_this_offset = Alignment.get_aligned_up( this_offset, alignment )
+        return aligned_struct_size
 
-        return aligned_this_offset
+    def _add_unaligned_member( self, node ):
+        node.set_this_offset( self._get_aligned_struct_size( node.get_type().get_alignment() ) )
 
-    def _reduce_padding_size( self, padding_size ):
-        return padding_size % self.struct.get_alignment()
+        alignment_padding = self._get_alignment_padding( node )
 
-    def _append_node_to_list( self, node ):
-        node.set_this_offset( self._get_next_aligned_this_offset( node.get_type().get_alignment() ) )
-        self._create_alignment_padding( node )
+        if alignment_padding:
+            self.dispatch( self.__back(), alignment_padding )
 
-        node.prev = self.members
-        self.members.next = node
+        self.__append( node )
 
-        self.members = node
-
-    def _pop_back_node_from_list( self ):
-        self.members = self.members.prev
-        self.members.next.prev = None
-        self.members.next = None
-
-    def _create_alignment_padding( self, node ):
-        this_offset = node.get_this_offset()
-        last_node_end = self.members.get_this_offset() + self.members.get_type().get_size()
-
-        alignment_padding_size = this_offset - last_node_end
+    def _get_alignment_padding( self, node ):
+        struct_end = self.__back().get_this_offset() + self.__back().get_type().get_size()
+        alignment_padding_size = node.get_this_offset() - struct_end
 
         if alignment_padding_size == 0:
-            return
+            return None
 
         padding_type = PaddingType( alignment_padding_size )
-        alignment_padding_node = PaddingNode( padding_type, None )
-        self.dispatch( self.members, alignment_padding_node )
+        return PaddingNode( padding_type, None )
 
-    def _convert_to_node( self, member ):
-        member.accept( self.type_to_node_conversion_visitor )
-        return self.type_to_node_conversion_visitor.get_node()
+
+    def _move_member_into_padding( self, padding, member ):
+        if padding.get_type().get_size() == member.get_type().get_size():
+            self._move_member_into_exact_match_padding( padding, member )
+        else:
+            self._move_member_into_not_exact_match_padding( padding, member )
 
     def _move_member_into_exact_match_padding( self, padding, member ):
-        # link list
-        member.next = padding.next
-
-        if member.next:
-            member.next.prev = member
-
-        member.prev = padding.prev
-        member.prev.next = member
-
-        # update member this offset
         member.set_this_offset( padding.get_this_offset() )
 
-        # update tail
-        if padding == self.members:
-            self.members = member
+        self.__insert( padding, member )
+        self.__erase( padding )
 
     def _move_member_into_not_exact_match_padding( self, padding, member ):
         member_new_this_offset \
             = Alignment.get_aligned_up( padding.get_this_offset(), member.get_type().get_alignment() )
 
-        member_size = member.get_size()
-
         front_padding_this_offset = padding.get_this_offset()
         front_padding_size = member_new_this_offset - front_padding_this_offset
 
-        back_padding_this_offset = member_new_this_offset + member_size
+        back_padding_this_offset = member_new_this_offset + member.get_size()
         right_padding_size \
             = ( padding.get_this_offset() + padding.get_type().get_size() ) \
-            - ( member_new_this_offset + member_size )
+            - ( member_new_this_offset + member.get_size() )
 
         if front_padding_size != 0 and right_padding_size != 0:
             member.set_this_offset( member_new_this_offset )
@@ -1165,59 +1148,74 @@ class StructCompacter:
             padding.set_size( new_padding_size )
 
             new_padding = PaddingNode( PaddingType( right_padding_size ), back_padding_this_offset )
-            self._make_padding_member_padding( padding, member, new_padding )
+
+            self.__insert( padding, member )
+            self.__insert( member, new_padding )
 
         elif front_padding_size != 0:
             member.set_this_offset( member_new_this_offset )
             padding.set_size( front_padding_size )
 
-            self._make_padding_member( padding, member )
+            self.__insert( padding, member )
 
         elif right_padding_size != 0:
             member.set_this_offset( member_new_this_offset )
+
             padding.set_size( right_padding_size )
             padding.set_this_offset( padding.get_this_offset() + member.get_type().get_size() )
 
-            self._make_member_padding( member, padding )
+            self.__insert( padding.prev, member )
 
-    def _make_padding_member_padding( self, padding, member, new_padding ):
-        new_padding.prev = member
-        new_padding.next = padding.next
-        if new_padding.next:
-            new_padding.next.prev = new_padding
+    # list
 
-        # member
-        member.prev = padding
-        member.prev.next = member
-        member.next = new_padding
+    @staticmethod
+    def _print( node, head ):
+        print( '+{', str( node ), '}' )
 
-        # tail
-        if self.members == padding:
-            self.members = new_padding
+        while head:
+            print( str( head ) )
+            head = head.next
 
-    def _make_padding_member( self, padding, member ):
-        member.next = padding.next
-        if member.next:
-            member.next.prev = member
+        print( '\n' )
 
-        member.prev = padding
-        member.prev.next = member
+    def __back( self ):
+        return self.members_back
 
-        if self.members == padding:
-            self.members = member
+    def __append( self, node ):
+        node.prev = self.members_back
+        self.members_back.next = node
 
-    def _make_member_padding( self, member, padding ):
-        member.prev = padding.prev
-        member.prev.next = member
+        self.members_back = node
 
-        member.next = padding
-        member.next.prev = member
+    def __pop_back( self ):
+        self.members_back = self.members_back.prev
+        self.members_back.next.prev = None
+        self.members_back.next = None
 
-    def _move_member_into_padding( self, padding, member ):
-        if padding.get_type().get_size() == member.get_type().get_size():
-            self._move_member_into_exact_match_padding( padding, member )
+    def __erase( self, node ):
+        if self.members_back == node:
+            self.__pop_back()
+            return None
+
+        node.prev.next = node.next
+        node.next.prev = node.prev
+
+        result = node.next
+
+        node.prev = None
+        node.next = None
+
+        return result
+
+    def __insert( self, pos, node ):
+        if self.members_back == pos:
+            self.__append( node )
         else:
-            self._move_member_into_not_exact_match_padding( padding, member )
+            node.next = pos.next
+            node.next.prev = node
+
+            node.prev = pos
+            pos.next = node
 
     @staticmethod
     def _find_padding( head, size, alignment ):
