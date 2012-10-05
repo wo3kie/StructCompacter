@@ -54,6 +54,7 @@ class IMember( IVisitable ):
     def __init__( self, name, type, this_offset ):
         self.name = name
         self.type = type
+
         self.this_offset = this_offset
 
     def get_name( self, width = None ):
@@ -236,6 +237,13 @@ class UnknownType( IType ):
 
     def get_alignment( self ):
         return 8
+
+class EmptyType( IType ):
+    def __init__( self ):
+        IType.__init__( self, 'empty', 0 )
+
+    def get_alignment( self ):
+        return 1
 
 class PtrType( IType ):
     def __init__( self, type, size ):
@@ -683,10 +691,7 @@ class INode( IMember ):
 
 class HeadNode( INode ):
     def __init__( self ):
-        INode.__init__( self, 'Head', None, None )
-
-    def get_size( self ):
-        return 0
+        INode.__init__( self, 'Head', EmptyType(), None )
 
     def get_this_offset( self ):
         return 0
@@ -761,7 +766,7 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
         self.node = InheritanceNode( inheritance.get_type(), None )
 
     def visit_member( self, member, * args ):
-        self.node = MemberNode( member.get_name(), member.get_type(), member.get_this_offset() )
+        self.node = MemberNode( member.get_name(), member.get_type(), None )
 
     def visit_padding( self, padding, * args ):
         self.node = PaddingNode( padding.get_type(), None )
@@ -850,8 +855,8 @@ class StructCompacter:
         if is_derived_class( struct ):
             return None
 
-        #if struct.get_name() != 'TravelRoute':
-        #    return None
+        if struct.get_name() != 'TravelRoute':
+            return None
 
         return self._process_impl( struct )
 
@@ -867,7 +872,7 @@ class StructCompacter:
 
             self.dispatch( tail, node )
 
-            #StructCompacter._print( self.members_head )
+            StructCompacter._print( node, self.members_head.next )
 
         result = StructType( struct.get_name(), None )
 
@@ -894,13 +899,12 @@ class StructCompacter:
         return members
 
     @staticmethod
-    def _print( node ):
-        if not node:
-            return
+    def _print( node, head ):
+        print( '+{', str( node ), '}' )
 
-        while node:
-            print( str( node ) )
-            node = node.next
+        while head:
+            print( str( head ) )
+            head = head.next
 
         print( '\n' )
 
@@ -922,19 +926,43 @@ class StructCompacter:
         self.dispatcher[ ( PaddingNode, PaddingNode ) ] = self._process_padding_padding
 
     def _reduce_padding_size( self, padding_size ):
-        return padding_size % self.struct.get_alignment()
+        return padding_size
+        #return padding_size % self.struct.get_alignment()
 
     def _process_padding_padding( self, tail, padding ):
-        new_size = self._reduce_padding_size( self.members_tail.get_size() + padding.get_type().get_size() )
-        padding.set_size( new_size )
+        new_padding_size = tail.get_type().get_size() + padding.get_type().get_size()
+        new_reduced_padding_size = self._reduce_padding_size( new_padding_size )
 
-    def _append_node_to_members_list( self, node ):
+        tail.set_size( new_reduced_padding_size )
+
+    def _append_node_to_nodes_list( self, node ):
+        self._calculate_new_this_offset( node )
+        self._create_alignment_padding( node )
+
         node.prev = self.members_tail
         self.members_tail.next = node
 
         self.members_tail = node
 
-        node.set_this_offset( node.prev.get_this_offset() + node.prev.get_size() )
+    def _create_alignment_padding( self, node ):
+        this_offset = node.get_this_offset()
+        last_node_end = self.members_tail.get_this_offset() + self.members_tail.get_type().get_size()
+
+        alignment_padding_size = this_offset - last_node_end
+
+        if alignment_padding_size == 0:
+            return
+
+        padding_type = PaddingType( alignment_padding_size )
+        alignment_padding_node = PaddingNode( padding_type, None )
+        self.dispatch( self.members_tail, alignment_padding_node )
+
+    def _calculate_new_this_offset( self, member ):
+        last_member = self.members_tail
+        new_this_offset = last_member.get_this_offset() + last_member.get_type().get_size()
+        new_aligned_this_offset = get_aligned_up( new_this_offset, member.get_type().get_alignment() )
+
+        member.set_this_offset( new_aligned_this_offset )
 
     def _process_padding_member( self, tail, member ):
         member_size = member.get_type().get_size()
@@ -942,24 +970,26 @@ class StructCompacter:
         padding_node = StructCompacter._find_padding( self.members_head, member_size, member_alignment )
 
         if padding_node == None:
-            self._append_node_to_members_list( member )
+            self._append_node_to_nodes_list( member )
         else:
             self._move_member_into_padding( padding_node, member )
-            self.dispatch( self.members_tail, PaddingNode( PaddingType( member_size ), None ) )
 
     def _process_member_padding( self, tail, padding ):
-        self._append_node_to_members_list( padding )
+        self._calculate_new_this_offset( padding )
+        self._append_node_to_nodes_list( padding )
 
     def _process_member_member( self, tail, member ):
-        member2_size = member.get_type().get_size()
-        member2_alignment = member.get_type().get_alignment()
-        padding_node = self._find_padding( self.members_head, member2_size, member2_alignment )
+        self._calculate_new_this_offset( member )
+
+        member_size = member.get_type().get_size()
+        member_alignment = member.get_type().get_alignment()
+        padding_node = self._find_padding( self.members_head, member_size, member_alignment )
 
         if padding_node == None:
-            self._append_node_to_members_list( member )
+            self._append_node_to_nodes_list( member )
         else:
             self._move_member_into_padding( padding_node, member )
-            self.dispatch( self.members_tail, PaddingNode( PaddingType( member2_size ), None ) )
+            #self.dispatch( self.members_tail, PaddingNode( PaddingType( member_size ), None ) )
 
     def _process_inheritance_padding( self, tail, padding ):
         print( '_process_inheritance_padding' )
@@ -974,10 +1004,12 @@ class StructCompacter:
         print( '_process_head_inheritance' )
 
     def _process_head_member( self, tail, member ):
-        self._append_node_to_members_list( member )
+        self._calculate_new_this_offset( member )
+        self._append_node_to_nodes_list( member )
 
     def _process_head_padding( self, tail, padding ):
-        self._append_node_to_members_list( padding )
+        self._calculate_new_this_offset( padding )
+        self._append_node_to_nodes_list( padding )
 
     def _convert_to_node( self, member ):
         member.accept( self.type_to_node_conversion_visitor )
