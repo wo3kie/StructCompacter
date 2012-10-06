@@ -17,6 +17,61 @@ from elftools.common.exceptions import ELFError
 from elftools.common.py3compat import bytes2str
 
 #
+# Tests
+#
+
+def precondition( condition ):
+    assert condition
+
+def postcondition( condition ):
+    assert condition
+
+def check_this_offset( this_offset, alignment ):
+    if this_offset < 0:
+        return False
+
+    if this_offset % alignment != 0:
+        return False
+
+    return True
+
+def soft_check_this_offset( this_offset, alignment ):
+    if this_offset == None or alignment == None:
+        return True
+
+    return check_this_offset( this_offset, alignment )
+
+def check_name( name ):
+    return len( name ) > 0
+
+def check_size( size ):
+    if size <= 0:
+        return False
+
+    return True
+
+def soft_check_size( size ):
+    if size == None:
+        return True
+
+    return check_size( size )
+
+def check_alignment( alignment, type_size ):
+    if alignment > type_size:
+        return False
+
+    if alignment not in [ 1, 2, 4, 8 ]:
+        return False
+
+    return True
+
+def soft_check_alignment( alignment, type_size ):
+    if alignment == None or type_size == None:
+        return True
+
+    return check_alignment( alignment, type_size )
+
+#
 # Utils
 #
 
@@ -28,18 +83,27 @@ def decode( values ):
     return result
 
 def abbrev( text, length ):
+    precondition( length >= 0 )
+
     if len( text ) <= length:
-        return text
+        result = text
+    elif length <= 3:
+        result = text
+    else:
+        result = text[0:length-3] + '...'
 
-    if length <= 3:
-        return text
+    postcondition( len( result ) <= length )
 
-    return text[0:length-3] + '...'
+    return result
 
 def is_template_name( text ):
+    precondition( len( text ) > 0 )
+
     return text.find( '<' ) != -1
 
 def is_stl_internal_name( text ):
+    precondition( len( text ) > 0 )
+
     return text.startswith( '_' )
 
 #
@@ -54,9 +118,13 @@ class IVisitable:
 #
 class IMember( IVisitable ):
     def __init__( self, name, type, this_offset ):
+        precondition( check_name( name ) )
+        precondition( type )
+        precondition( soft_check_this_offset( this_offset, type.get_alignment() ) )
+
+
         self.name = name
         self.type = type
-
         self.this_offset = this_offset
 
     def get_name( self, width = None ):
@@ -72,6 +140,8 @@ class IMember( IVisitable ):
         return self.this_offset
 
     def set_this_offset( self, this_offset ):
+        precondition( soft_check_this_offset( this_offset, self.get_type().get_alignment() ) )
+
         self.this_offset = this_offset
 
     def get_size( self ):
@@ -86,6 +156,8 @@ class IMember( IVisitable ):
     # details
 
     def _set_type( self, type ):
+        precondition( type )
+
         self.type = type
 
     def _get_name( self ):
@@ -145,27 +217,26 @@ class Padding( IMember ):
             + ' [this+' + str( self.this_offset ) + ']'
 
 #
-# Size
+# ConditionalStorage
 #
-class Size:
+class ConditionalStorage:
+    def __init__( self, predicate, value = None ):
+        self.predicate = predicate
+        self.value = value
+
     def set( self, value ):
-        pass
+        if self.predicate( self.value, value ) == False:
+            return False
+
+        self.value = value
+        return True
 
     def get( self ):
-        pass
+        return self.value
 
-class ConditionalStorage:
-  def __init__( self, predicate, value = None ):
-      self.predicate = predicate
-      self.value = value
-
-  def set( self, value ):
-      if self.predicate( self.value, value ):
-          self.value = value
-
-  def get( self ):
-      return self.value
-
+#
+# predicates
+#
 def true_predicate( value1, value2 ):
     return True
 
@@ -189,6 +260,9 @@ def greater_than( value1, value2 ):
 #
 class IType( IVisitable ):
     def __init__( self, name, size ):
+        precondition( check_name( name ) )
+        precondition( soft_check_size( size ) )
+
         self.name = name
 
         if size == None:
@@ -199,14 +273,20 @@ class IType( IVisitable ):
         self.alignment = ConditionalStorage( greater_than, None )
 
     def set_name( self, name ):
+        precondition( check_name( name ) )
+
         self.name = name
 
     def get_name( self, width = None ):
         if width == None:
             return self._get_name()
-        else:
-            return self._decorate_name( \
+
+        result = self._decorate_name( \
                 abbrev( self._get_name(), width - self._get_decoration_size() ) )
+
+        postcondition( len( result ) <= width )
+
+        return result
 
     def get_desc( self, width = None ):
         prefix = '['
@@ -214,17 +294,26 @@ class IType( IVisitable ):
 
         if width == None:
             return prefix + self.get_name() + suffix
-        else:
-            return prefix + self.get_name( width - len( prefix ) - len( suffix ) ) + suffix
 
-    def set_size( self, size ):
-        self.size.set( size )
+        result = prefix + self.get_name( width - len( prefix ) - len( suffix ) ) + suffix
+
+        postcondition( len( result ) <= width )
+
+        return result
+
+    def try_set_size( self, size ):
+        precondition( soft_check_size( size ) )
+
+        return self.size.set( size )
 
     def get_size( self ):
         return self.size.get()
 
-    def set_alignment( self, alignment ):
-        self.alignment.set( alignment )
+    def try_set_alignment( self, alignment ):
+        if( soft_check_alignment( alignment, self.get_size() ) ) == False:
+            print( alignment, self.get_size() )
+
+        return self.alignment.set( alignment )
 
     def get_alignment( self ):
         return self.alignment.get()
@@ -246,13 +335,6 @@ class IType( IVisitable ):
 class UnknownType( IType ):
     def __init__( self ):
         IType.__init__( self, 'unknown', None )
-
-    def get_alignment( self ):
-        return 1
-
-class EmptyType( IType ):
-    def __init__( self ):
-        IType.__init__( self, 'empty', 0 )
 
     def get_alignment( self ):
         return 1
@@ -311,9 +393,6 @@ class ArrayType( IType ):
 
         self.type = type
 
-    def get_name( self, width = None ):
-        return self.type.get_name()
-
     def get_brief_desc( self ):
         if self.get_size() == None:
             size = '?'
@@ -330,8 +409,11 @@ class ArrayType( IType ):
 
     # details
 
+    def _get_name( self ):
+        return self.type._get_name()
+
     def _decorate_name( self, name ):
-        return self.get_name() + '[?]'
+        return name + '[?]'
 
     def _get_decoration_size( self ):
         return 3
@@ -419,7 +501,7 @@ class EnumType( IType ):
 
 class PaddingType( IType ):
     def __init__( self, size ):
-        IType.__init__( self, None, size )
+        IType.__init__( self, 'Padding', size )
 
     def get_alignment( self ):
         return 1
@@ -461,7 +543,7 @@ def resolve_members_type_size_and_alignment( struct ):
     if struct.get_is_valid() == False:
         return
 
-    struct.set_alignment( Alignment.get_from_sizeof( struct.get_size() ) )
+    struct.try_set_alignment( Alignment.get_from_sizeof( struct.get_size() ) )
 
     members = struct.get_members()
 
@@ -474,19 +556,27 @@ def resolve_members_type_size_and_alignment( struct ):
         next = members[ i + 1 ]
 
         type_size = next.get_this_offset() - current.get_this_offset()
-        type_alignment = Alignment.get_from_position( current.get_this_offset(), type_size )
+        if type_size == 0:
+            raise Exception( 'EBO for type %s' % struct.get_name() )
 
-        current.get_type().set_size( type_size )
-        current.get_type().set_alignment( type_alignment )
+        current.get_type().try_set_size( type_size )
+
+        type_alignment \
+            = Alignment.get_from_position( current.get_this_offset(), current.get_type().get_size() )
+        current.get_type().try_set_alignment( type_alignment )
 
     # resolve last
     current = members[ -1 ]
 
     type_size = struct.get_size() - current.get_this_offset()
-    type_alignment = Alignment.get_from_position( current.get_this_offset(), type_size )
+    if type_size == 0:
+        raise Exception( 'EBO for type %s' % struct.get_name() )
 
-    current.get_type().set_size( type_size )
-    current.get_type().set_alignment( type_alignment )
+    current.get_type().try_set_size( type_size )
+
+    type_alignment \
+        = Alignment.get_from_position( current.get_this_offset(), current.get_type().get_size() )
+    current.get_type().try_set_alignment( type_alignment )
 
 #
 # find_and_create_padding_members
@@ -617,7 +707,7 @@ class CalculateTotalPaddingVisitor( IMemberVisitor ):
     def visit_padding( self, padding, * args ):
         self.total_padding += padding.get_type().get_size()
 
-    def get_total_padding( self ):
+    def get( self ):
         return self.total_padding
 
 def calculate_total_padding( struct ):
@@ -628,7 +718,7 @@ def calculate_total_padding( struct ):
     for member in members:
         member.accept( total_padding_visitor )
 
-    return total_padding_visitor.get_total_padding()
+    return total_padding_visitor.get()
 
 #
 # IsDerivedClassVisitor
@@ -732,11 +822,17 @@ class INode( IMember ):
         self.next = None
         self.prev = None
 
+    def get_size( self ):
+        return self.get_type().get_size()
+
 class HeadNode( INode ):
     def __init__( self ):
-        INode.__init__( self, 'Head', EmptyType(), None )
+        INode.__init__( self, 'Head', UnknownType(), None )
 
     def get_this_offset( self ):
+        return 0
+
+    def get_size( self ):
         return 0
 
     def __str__( self ):
@@ -744,9 +840,12 @@ class HeadNode( INode ):
 
 class EndNode( INode ):
     def __init__( self ):
-        INode.__init__( self, 'End', EmptyType(), None )
+        INode.__init__( self, 'End', UnknownType(), None )
 
     def get_this_offset( self ):
+        return 0
+
+    def get_size( self ):
         return 0
 
     def __str__( self ):
@@ -765,14 +864,14 @@ class MemberNode( INode ):
 
     def __str__( self ):
         return self.get_name() + ' ' + self.get_type().get_name() \
-            + ' (' + str( self.get_type().get_size() ) + ')' \
+            + ' (' + str( self.get_size() ) + ')' \
             + ' +(' + str( self.get_this_offset() ) + ')'
 
 class PaddingNode( INode ):
     def __init__( self, type, this_offset ):
         INode.__init__( self, '__padding', type, this_offset )
 
-    def set_size( self, size ):
+    def try_set_size( self, size ):
         self._set_type( PaddingType( size ) )
 
     def __str__( self ):
@@ -828,21 +927,21 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
         return self.node
 
 #
-# FindPaddingVisitor
+# FindMatchingPaddingVisitor
 #
 def check_padding( padding, size, alignment ):
-    if padding.get_type().get_size() < size:
+    if padding.get_size() < size:
         return False
 
     padding_this = padding.get_this_offset()
     padding_this_aligned = Alignment.get_aligned_up( padding_this, alignment )
 
-    return ( padding.get_type().get_size() - ( padding_this_aligned - padding_this ) ) >= size
+    return ( padding.get_size() - ( padding_this_aligned - padding_this ) ) >= size
 
 #
 # Struct members representation
 #
-class FindPaddingVisitor( INodeVisitor ):
+class FindMatchingPaddingVisitor( INodeVisitor ):
     def __init__( self, size, alignment ):
         INodeVisitor.__init__( self )
 
@@ -855,7 +954,7 @@ class FindPaddingVisitor( INodeVisitor ):
         if check_padding( padding, self.size, self.alignment ):
             self.padding = padding
 
-    def get_padding( self ):
+    def get( self ):
         return self.padding
 
 class NodeToTypeConversionVisitor( INodeVisitor ):
@@ -865,7 +964,7 @@ class NodeToTypeConversionVisitor( INodeVisitor ):
         self.type = None
 
     def visit_padding_node( self, padding, * args ):
-        self.type = Padding( PaddingType( padding.get_type().get_size() ), padding.get_this_offset() )
+        self.type = Padding( PaddingType( padding.get_size() ), padding.get_this_offset() )
 
     def visit_member_node( self, member, * args ):
         name = member.get_name()
@@ -887,8 +986,8 @@ class StructCompacter:
     def __init__( self ):
         self.type_to_node_conversion_visitor = TypesToNodesConversionVisitor()
 
-        self.members_head = HeadNode()
-        self.members_back = self.members_head
+        self.members_front = HeadNode()
+        self.members_back = self.members_front
 
         self._init_dispatcher()
 
@@ -903,9 +1002,6 @@ class StructCompacter:
 
         self.struct = struct
 
-        #if is_derived_class( struct ):
-        #    return None
-
         #if struct.get_name() != 'DRVInfo':
         #    return None
 
@@ -913,14 +1009,14 @@ class StructCompacter:
             self._pack_members()
 
             packed_struct_size \
-                = self.__back().get_this_offset() + self.__back().get_type().get_size()
+                = self.__back().get_this_offset() + self.__back().get_size()
 
             if struct.get_size() == packed_struct_size:
                 return None
 
             result = StructType( struct.get_name(), packed_struct_size )
-            result.set_alignment( struct.get_alignment() )
-            result.set_members( StructCompacter._convert_nodes_to_members( self.members_head.next ) )
+            result.try_set_alignment( struct.get_alignment() )
+            result.set_members( StructCompacter._convert_nodes_to_members( self.__front().next ) )
 
             return result
         except Exception as exception:
@@ -984,7 +1080,7 @@ class StructCompacter:
         return
 
     def _process_member_end( self, tail, end ):
-        struct_end = tail.get_this_offset() + tail.get_type().get_size()
+        struct_end = tail.get_this_offset() + tail.get_size()
         aligned_struct_end = Alignment.get_aligned_up( struct_end, self.struct.get_alignment() )
 
         back_padding_size = aligned_struct_end - struct_end
@@ -1004,21 +1100,21 @@ class StructCompacter:
 
         if back_padding_new_size == 0:
             self.__pop_back()
-        elif tail.get_type().get_size() != back_padding_new_size:
-            tail.set_size( back_padding_new_size )
+        elif tail.get_size() != back_padding_new_size:
+            tail.try_set_size( back_padding_new_size )
 
     def _process_padding_padding( self, tail, padding ):
-        total_padding_size = tail.get_type().get_size() + padding.get_type().get_size()
+        total_padding_size = tail.get_size() + padding.get_size()
         total_padding_size = total_padding_size % self.struct.get_alignment()
 
-        tail.set_size( total_padding_size )
+        tail.try_set_size( total_padding_size )
 
     def _process_padding_member( self, tail, member ):
-        member_size = member.get_type().get_size()
+        member_size = member.get_size()
         member_alignment = member.get_type().get_alignment()
 
         padding_node \
-            = StructCompacter._find_padding( self.members_head, member_size, member_alignment )
+            = StructCompacter._find_matching_padding( self.__front(), member_size, member_alignment )
 
         if padding_node != None:
             self._move_member_into_padding( padding_node, member )
@@ -1032,9 +1128,9 @@ class StructCompacter:
         self._add_unaligned_member( padding )
 
     def _process_member_member( self, tail, member ):
-        member_size = member.get_type().get_size()
+        member_size = member.get_size()
         member_alignment = member.get_type().get_alignment()
-        padding_node = self._find_padding( self.members_head, member_size, member_alignment )
+        padding_node = self._find_matching_padding( self.__front(), member_size, member_alignment )
 
         if padding_node == None:
             self._add_unaligned_member( member )
@@ -1074,24 +1170,24 @@ class StructCompacter:
 
             self.dispatch( tail, node )
 
-            #StructCompacter._print( node, self.members_head.next )
+            #StructCompacter._print( node, self.__front().next )
 
         self.dispatch( self.__back(), EndNode() )
 
     def _try_shrink_padding_right( self, padding, member ):
         if Alignment.is_aligned( padding.get_this_offset(), member.get_type().get_alignment() ):
             self.__pop_back()
-        elif padding.get_type().get_size() < member.get_type().get_alignment():
+        elif padding.get_size() < member.get_type().get_alignment():
             return False
         else:
-            padding.set_size( padding.get_type().get_size() % member.get_type().get_alignment() )
+            padding.try_set_size( padding.get_size() % member.get_type().get_alignment() )
 
         self._add_unaligned_member( member )
 
         return True
 
     def _get_aligned_struct_size( self, alignment ):
-        struct_size = self.__back().get_this_offset() + self.__back().get_type().get_size()
+        struct_size = self.__back().get_this_offset() + self.__back().get_size()
         aligned_struct_size = Alignment.get_aligned_up( struct_size, alignment )
 
         return aligned_struct_size
@@ -1107,7 +1203,7 @@ class StructCompacter:
         self.__append( node )
 
     def _get_alignment_padding( self, node ):
-        struct_end = self.__back().get_this_offset() + self.__back().get_type().get_size()
+        struct_end = self.__back().get_this_offset() + self.__back().get_size()
         alignment_padding_size = node.get_this_offset() - struct_end
 
         if alignment_padding_size == 0:
@@ -1116,9 +1212,8 @@ class StructCompacter:
         padding_type = PaddingType( alignment_padding_size )
         return PaddingNode( padding_type, None )
 
-
     def _move_member_into_padding( self, padding, member ):
-        if padding.get_type().get_size() == member.get_type().get_size():
+        if padding.get_size() == member.get_size():
             self._move_member_into_exact_match_padding( padding, member )
         else:
             self._move_member_into_not_exact_match_padding( padding, member )
@@ -1138,14 +1233,13 @@ class StructCompacter:
 
         back_padding_this_offset = member_new_this_offset + member.get_size()
         right_padding_size \
-            = ( padding.get_this_offset() + padding.get_type().get_size() ) \
+            = ( padding.get_this_offset() + padding.get_size() ) \
             - ( member_new_this_offset + member.get_size() )
 
-        if front_padding_size != 0 and right_padding_size != 0:
-            member.set_this_offset( member_new_this_offset )
+        member.set_this_offset( member_new_this_offset )
 
-            new_padding_size = member_new_this_offset - padding.this_offset
-            padding.set_size( new_padding_size )
+        if front_padding_size != 0 and right_padding_size != 0:
+            padding.try_set_size( member_new_this_offset - padding.this_offset )
 
             new_padding = PaddingNode( PaddingType( right_padding_size ), back_padding_this_offset )
 
@@ -1153,16 +1247,13 @@ class StructCompacter:
             self.__insert( member, new_padding )
 
         elif front_padding_size != 0:
-            member.set_this_offset( member_new_this_offset )
-            padding.set_size( front_padding_size )
+            padding.try_set_size( front_padding_size )
 
             self.__insert( padding, member )
 
         elif right_padding_size != 0:
-            member.set_this_offset( member_new_this_offset )
-
-            padding.set_size( right_padding_size )
-            padding.set_this_offset( padding.get_this_offset() + member.get_type().get_size() )
+            padding.try_set_size( right_padding_size )
+            padding.set_this_offset( padding.get_this_offset() + member.get_size() )
 
             self.__insert( padding.prev, member )
 
@@ -1177,6 +1268,9 @@ class StructCompacter:
             head = head.next
 
         print( '\n' )
+
+    def __front( self ):
+        return self.members_front
 
     def __back( self ):
         return self.members_back
@@ -1218,14 +1312,14 @@ class StructCompacter:
             pos.next = node
 
     @staticmethod
-    def _find_padding( head, size, alignment ):
-        find_padding_visitor = FindPaddingVisitor( size, alignment )
+    def _find_matching_padding( head, size, alignment ):
+        visitor = FindMatchingPaddingVisitor( size, alignment )
 
         while head:
-            head.accept( find_padding_visitor )
+            head.accept( visitor )
 
-            if find_padding_visitor.get_padding():
-                return find_padding_visitor.get_padding()
+            if visitor.get():
+                return visitor.get()
 
             head = head.next
 
@@ -1531,11 +1625,11 @@ class DIEReader:
             return self.types[ die.offset ]
 
         except KeyError:
-            struct = StructType( None, None )
+            struct = StructType( '__not_know_yet__', None )
             self.types[ die.offset ] = struct
 
         struct.set_name( DIE.get_name( die, self.dies ) )
-        struct.set_size( DIE.get_size( die ) )
+        struct.try_set_size( DIE.get_size( die ) )
 
         for child in die.iter_children():
             if DIE.is_inheritance( child ):
