@@ -21,10 +21,13 @@ from elftools.common.py3compat import bytes2str
 #
 
 def precondition( condition ):
-    assert condition
+    assert condition, str( condition )
+
+def check( condition ):
+    assert condition, str( condition )
 
 def postcondition( condition ):
-    assert condition
+    assert condition, str( condition )
 
 def check_this_offset( this_offset, alignment ):
     if this_offset < 0:
@@ -106,6 +109,11 @@ def is_stl_internal_name( text ):
 
     return text.startswith( '_' )
 
+def is_vtpr( text ):
+    precondition( len( text ) > 0 )
+
+    return text.startswith( '_vptr.' )
+
 #
 # IVisitable
 #
@@ -121,7 +129,6 @@ class IMember( IVisitable ):
         precondition( check_name( name ) )
         precondition( type )
         precondition( soft_check_this_offset( this_offset, type.get_alignment() ) )
-
 
         self.name = name
         self.type = type
@@ -186,7 +193,7 @@ class Member( IMember ):
         self.line_no = line_no
 
     def is_moveable( self ):
-        if self.name.startswith( '_vptr.' ):
+        if is_vptr( self.name ):
             return False
 
         return True
@@ -513,10 +520,15 @@ class PaddingType( IType ):
 class Alignment:
     @staticmethod
     def get_from_sizeof( size ):
+        precondition( size > 0 )
+
         return gcd( 8, size )
 
     @staticmethod
     def get_from_position( this_offset, type_size ):
+        precondition( this_offset >= 0 )
+        precondition( type_size > 0 )
+
         for i in [ 8, 4, 2, 1 ]:
             if i > type_size:
                 continue
@@ -526,57 +538,72 @@ class Alignment:
 
     @staticmethod
     def is_aligned( this_offset, alignment ):
+        precondition( this_offset >= 0 )
+        precondition( alignment > 0 )
+
         return this_offset % alignment == 0
 
     @staticmethod
     def get_aligned_down( value, alignment ):
+        precondition( value >= 0 )
+        precondition( alignment > 0 )
+
         return ( value // alignment ) * alignment
 
     @staticmethod
     def get_aligned_up( value, alignment ):
+        precondition( value >= 0 )
+        precondition( alignment > 0 )
+
         return ceil( value / alignment ) * alignment
 
 #
-# resolve_members_type_size_and_alignment
+# fix_size_and_alignment
 #
-def resolve_members_type_size_and_alignment( struct ):
+def fix_size_and_alignment( struct ):
     if struct.get_is_valid() == False:
         return
-
-    struct.try_set_alignment( Alignment.get_from_sizeof( struct.get_size() ) )
 
     members = struct.get_members()
 
     if len( members ) == 0:
+        struct.try_set_size( 1 )
+        struct.try_set_alignment( 1 )
+
         return
+
+    struct.try_set_alignment( Alignment.get_from_sizeof( struct.get_size() ) )
 
     # resolve all but last
     for i in range( 0, len( members ) -1 ):
         current = members[ i ]
         next = members[ i + 1 ]
+        member_size = next.get_this_offset() - current.get_this_offset()
 
-        type_size = next.get_this_offset() - current.get_this_offset()
-        if type_size == 0:
+        if member_size == 0:
             raise Exception( 'EBO for type %s' % struct.get_name() )
 
-        current.get_type().try_set_size( type_size )
+        current.get_type().try_set_size( member_size )
 
-        type_alignment \
+        alignment \
             = Alignment.get_from_position( current.get_this_offset(), current.get_type().get_size() )
-        current.get_type().try_set_alignment( type_alignment )
+
+        current.get_type().try_set_alignment( alignment )
 
     # resolve last
     current = members[ -1 ]
 
-    type_size = struct.get_size() - current.get_this_offset()
-    if type_size == 0:
+    member_size = struct.get_size() - current.get_this_offset()
+
+    if member_size == 0:
         raise Exception( 'EBO for type %s' % struct.get_name() )
 
-    current.get_type().try_set_size( type_size )
+    current.get_type().try_set_size( member_size )
 
-    type_alignment \
+    alignment \
         = Alignment.get_from_position( current.get_this_offset(), current.get_type().get_size() )
-    current.get_type().try_set_alignment( type_alignment )
+
+    current.get_type().try_set_alignment( alignment )
 
 #
 # find_and_create_padding_members
@@ -590,7 +617,7 @@ def find_and_create_padding_members( struct ):
         return
 
     members = struct.get_members()
-    members_with_padding = []
+    members_and_paddings = []
 
     if len( members ) == 0:
         return
@@ -600,27 +627,26 @@ def find_and_create_padding_members( struct ):
         next = members[ i + 1 ]
         padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
 
-        if padding_size == 0:
-            members_with_padding.append( current )
-        elif padding_size > 0:
-            members_with_padding.append( current )
-            members_with_padding.append( _create_padding( current, padding_size ) )
-        else:
-            struct.set_is_valid( False )
+        if padding_size < 0:
             raise Exception( 'EBO for type %s' % struct.get_name() )
+
+        members_and_paddings.append( current )
+
+        if padding_size > 0:
+            members_and_paddings.append( _create_padding( current, padding_size ) )
 
     current = members[ -1 ]
     padding_size = struct.get_size() - current.get_this_offset() - current.get_size()
 
-    if padding_size == 0:
-        members_with_padding.append( current )
-    elif padding_size > 0:
-        members_with_padding.append( current )
-        members_with_padding.append( _create_padding( current, padding_size ) )
-    else:
+    if padding_size < 0:
         raise Exception( 'EBO for type %s' % struct.get_name() )
 
-    struct.set_members( members_with_padding )
+    members_and_paddings.append( current )
+
+    if padding_size > 0:
+        members_and_paddings.append( _create_padding( current, padding_size ) )
+
+    struct.set_members( members_and_paddings )
 
 #
 # ITypeVisitor for IType hierarchy
@@ -648,7 +674,7 @@ class ITypeVisitor:
     def visit_ptr_type( self, ptr, * args ):
         return
 
-    def visit_ref_type( self, refe, * args ):
+    def visit_ref_type( self, ref, * args ):
         return
 
     def visit_base_type( self, base, * args ):
@@ -720,33 +746,6 @@ def calculate_total_padding( struct ):
 
     return total_padding_visitor.get()
 
-#
-# IsDerivedClassVisitor
-#
-class IsDerivedClassVisitor( IMemberVisitor ):
-    def __init__( self ):
-        IMemberVisitor.__init__( self )
-
-        self.is_derived_class = False
-
-    def visit_inheritance( self, padding, * args ):
-        self.is_derived_class = True
-
-    def get_is_base_class( self ):
-        return self.is_derived_class
-
-def is_derived_class( struct ):
-    members = struct.get_members()
-
-    is_base_class_visitor = IsDerivedClassVisitor()
-
-    for member in members:
-        member.accept( is_base_class_visitor )
-
-        if is_base_class_visitor.get_is_base_class():
-            return True
-
-    return False
 
 def print_diff_of_structs( struct1, struct2 ):
     def _format( member, width ):
@@ -872,6 +871,8 @@ class PaddingNode( INode ):
         INode.__init__( self, '__padding', type, this_offset )
 
     def try_set_size( self, size ):
+        precondition( check_size( size ) )
+
         self._set_type( PaddingType( size ) )
 
     def __str__( self ):
@@ -930,6 +931,9 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
 # FindMatchingPaddingVisitor
 #
 def check_padding( padding, size, alignment ):
+    precondition( check_size( size ) )
+    precondition( check_alignment( alignment, size ) )
+
     if padding.get_size() < size:
         return False
 
@@ -1326,6 +1330,34 @@ class StructCompacter:
         return None
 
 #
+# FixSizeAlignmentVisitor
+#
+class FixSizeAlignmentVisitor( ITypeVisitor ):
+    def __init__( self ):
+        ITypeVisitor.__init__( self )
+
+    def visit_struct_type( self, struct, * args ):
+        try:
+            fix_size_and_alignment( struct )
+        except Exception as exception:
+            print( 'Warning: ', exception )
+            struct.set_is_valid( False )
+
+#
+# DetectPaddingVisitor
+#
+class DetectPaddingVisitor( ITypeVisitor ):
+    def __init__( self ):
+        ITypeVisitor.__init__( self )
+
+    def visit_struct_type( self, struct, * args ):
+        try:
+            find_and_create_padding_members( struct )
+        except Exception as exception:
+            print( 'Warning: ', exception )
+            struct.set_is_valid( False )
+
+#
 # CompactStructVisitor
 #
 class CompactStructVisitor( ITypeVisitor ):
@@ -1333,13 +1365,6 @@ class CompactStructVisitor( ITypeVisitor ):
         ITypeVisitor.__init__( self )
 
     def visit_struct_type( self, struct, * args ):
-        try:
-            resolve_members_type_size_and_alignment( struct )
-            find_and_create_padding_members( struct )
-        except Exception as exception:
-            print( 'Warning: ', exception )
-            struct.set_is_valid( False )
-
         if self._skip_type( struct ):
             return
 
@@ -1677,6 +1702,8 @@ class Application:
 
     def process( self, file_name ):
         types = self._read_DWARF( file_name )
+        types = self._fix_types( types )
+        types = self._detect_padding( types )
         types = self._compact_types( types )
         self._print_result( types )
 
@@ -1725,10 +1752,26 @@ class Application:
             print( '%x %s' % ( id, type.get_full_desc() ) )
 
     def _compact_types( self, types ):
-        compact_struct_visitor = CompactStructVisitor()
+        visitor = CompactStructVisitor()
 
         for id, type in types.items():
-            type.accept( compact_struct_visitor, None )
+            type.accept( visitor, None )
+
+        return types
+
+    def _detect_padding( self, types ):
+        visitor = DetectPaddingVisitor()
+
+        for id, type in types.items():
+            type.accept( visitor, None )
+
+        return types
+
+    def _fix_types( self, types ):
+        visitor = FixSizeAlignmentVisitor()
+
+        for id, type in types.items():
+            type.accept( visitor, None )
 
         return types
 
