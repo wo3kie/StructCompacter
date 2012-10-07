@@ -341,17 +341,11 @@ class IType( IVisitable ):
     def get_is_declaration( self ):
         return self.is_declaration
 
+    def get_is_completely_defined( self ):
+        return False
+
     def get_is_well_defined( self ):
-        if self.get_is_declaration():
-            return False
-
-        if self.get_size() == 0:
-            return False
-
-        if self.get_alignment() == None:
-            return False
-
-        return True
+        return False
 
     # details
 
@@ -376,6 +370,12 @@ class PtrType( IType ):
         IType.__init__( self, 'Ptr', size )
         self.type = type
 
+    def get_is_completely_defined( self ):
+        return True
+
+    def get_is_well_defined( self ):
+        return True
+
     # details
 
     def _get_name( self ):
@@ -391,6 +391,12 @@ class RefType( IType ):
     def __init__( self, type, size ):
         IType.__init__( self, 'Ref', size )
         self.type = type
+
+    def get_is_completely_defined( self ):
+        return True
+
+    def get_is_well_defined( self ):
+        return True
 
     # details
 
@@ -408,6 +414,12 @@ class ConstType( IType ):
         IType.__init__( self, 'Const', size )
         self.type = type
 
+    def get_is_completely_defined( self ):
+        return self.type.get_is_well_defined()
+
+    def get_is_well_defined( self ):
+        return self.type.get_is_well_defined()
+
     # details
 
     def _get_name( self ):
@@ -424,6 +436,12 @@ class VolatileType( IType ):
         IType.__init__( self, 'Volatile', size )
         self.type = type
 
+    def get_is_completely_defined( self ):
+        return self.type.get_is_well_defined()
+
+    def get_is_well_defined( self ):
+        return self.type.get_is_well_defined()
+
     # details
 
     def _get_name( self ):
@@ -439,9 +457,21 @@ class BaseType( IType ):
     def __init__( self, name, size ):
         IType.__init__( self, name, size )
 
+    def get_is_completely_defined( self ):
+        return True
+
+    def get_is_well_defined( self ):
+        return True
+
 class UnionType( IType ):
     def __init__( self, name, size ):
         IType.__init__( self, name, size )
+
+    def get_is_completely_defined( self ):
+        return True
+
+    def get_is_well_defined( self ):
+        return True
 
     # details
 
@@ -456,6 +486,12 @@ class ArrayType( IType ):
         IType.__init__( self, 'Array', None )
 
         self.type = type
+
+    def get_is_completely_defined( self ):
+        return self.get_type().get_is_well_defined()
+
+    def get_is_well_defined( self ):
+        return self.get_type().get_is_well_defined()
 
     def get_brief_desc( self ):
         if self.get_size() == None:
@@ -514,11 +550,19 @@ class StructType( IType ):
         result += str( alignment )
         result += ')'
 
-        if self.get_is_declaration() == True:
-            result += ' (D)'
+        result += '('
 
-        if self.get_is_well_defined() == False:
-            result += ' (!)'
+        if self.get_is_well_defined():
+            result += 'W'
+        else:
+            result += ' '
+
+        if self.get_is_completely_defined():
+            result += 'C'
+        else:
+            result += ' '
+
+        result += ')'
 
         for member in self.members:
             result += '\n\t' + member.get_brief_desc()
@@ -546,14 +590,21 @@ class StructType( IType ):
     def get_is_compactable( self ):
         return True
 
+    def get_is_completely_defined( self ):
+        if self.get_is_declaration():
+            return False
+
+        for member in self.members:
+            if member.get_type().get_is_completely_defined() == False:
+                return False
+
+        return True
+
     def get_is_well_defined( self ):
         if self.get_size() == 0:
             return False
 
         if self.get_alignment() == None:
-            return False
-
-        if self.get_is_declaration():
             return False
 
         for member in self.members:
@@ -574,6 +625,12 @@ class EnumType( IType ):
     def __init__( self, name, size ):
         IType.__init__( self, name, size )
 
+    def get_is_completely_defined( self ):
+        return True
+
+    def get_is_well_defined( self ):
+        return True
+
     # details
 
     def _decorate_name( self, name ):
@@ -588,6 +645,14 @@ class PaddingType( IType ):
 
     def get_alignment( self ):
         return 1
+
+    def get_is_completely_defined( self ):
+        return True
+
+    def get_is_well_defined( self ):
+        return True
+
+    # details
 
     def _get_name( self ):
         return 'char[' + str( self.get_size() ) + ']'
@@ -633,6 +698,10 @@ class Alignment:
 
         return ceil( value / alignment ) * alignment
 
+class EBOException( Exception ):
+    def __init__( self, text ):
+        Exception.__init__( self, text )
+
 #
 # fix_size_and_alignment
 #
@@ -640,8 +709,8 @@ def fix_size_and_alignment( struct ):
     members = struct.get_members()
 
     if len( members ) == 0:
-        struct.try_set_size( 99999 )
-        struct.try_set_alignment( math.min( struct.get_size(), 99999 ) )
+        struct.try_set_size( 128 * 128 )
+        struct.try_set_alignment( min( struct.get_size(), 8 ) )
 
         return
 
@@ -653,8 +722,8 @@ def fix_size_and_alignment( struct ):
         next = members[ i + 1 ]
         member_size = next.get_this_offset() - current.get_this_offset()
 
-        if member_size == 0:
-            raise Exception( 'EBO for type %s' % struct.get_name() )
+        if member_size <= 0:
+            raise EBOException( 'EBO for type %s' % struct.get_name() )
 
         current.get_type().try_set_size( member_size )
 
@@ -668,8 +737,8 @@ def fix_size_and_alignment( struct ):
 
     member_size = struct.get_size() - current.get_this_offset()
 
-    if member_size == 0:
-        raise Exception( 'EBO for type %s' % struct.get_name() )
+    if member_size <= 0:
+        raise EBOException( 'EBO for type %s' % struct.get_name() )
 
     current.get_type().try_set_size( member_size )
 
@@ -698,7 +767,7 @@ def find_and_create_padding_members( struct ):
         padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
 
         if padding_size < 0:
-            raise Exception( 'EBO for type %s' % struct.get_name() )
+            raise EBOException( 'EBO for type %s' % struct.get_name() )
 
         members_and_paddings.append( current )
 
@@ -709,7 +778,7 @@ def find_and_create_padding_members( struct ):
     padding_size = struct.get_size() - current.get_this_offset() - current.get_size()
 
     if padding_size < 0:
-        raise Exception( 'EBO for type %s' % struct.get_name() )
+        raise EBOException( 'EBO for type %s' % struct.get_name() )
 
     members_and_paddings.append( current )
 
@@ -1083,9 +1152,7 @@ class NodeToTypeConversionVisitor( INodeVisitor ):
 # StructCompacter
 #
 class StructCompacter:
-    def __init__( self, config ):
-        self.config = config
-
+    def __init__( self ):
         self.type_to_node_conversion_visitor = TypesToNodesConversionVisitor()
 
         self.members_front = HeadNode()
@@ -1096,10 +1163,6 @@ class StructCompacter:
         self.struct = None
 
     def process( self, struct ):
-        if len( self.config.requested_types ):
-            if struct._get_name() not in self.config.requested_types:
-                return None
-
         if struct.get_is_well_defined() == False:
             return None
 
@@ -1114,8 +1177,8 @@ class StructCompacter:
             packed_struct_size \
                 = self.__back().get_this_offset() + self.__back().get_size()
 
-            #if struct.get_size() == packed_struct_size:
-            #    return None
+            if struct.get_size() == packed_struct_size:
+                return None
 
             result = StructType( struct.get_name(), packed_struct_size )
             result.try_set_alignment( struct.get_alignment() )
@@ -1123,7 +1186,7 @@ class StructCompacter:
 
             return result
 
-        except Exception as exception:
+        except EBOException as exception:
             if self.config.show_warnings:
                 print( 'Warning:', exception )
 
@@ -1439,56 +1502,34 @@ class StructCompacter:
 # FixSizeAlignmentVisitor
 #
 class FixSizeAlignmentVisitor( ITypeVisitor ):
-    def __init__( self, config ):
+    def __init__( self ):
         ITypeVisitor.__init__( self )
 
-        self.config = config
-
     def visit_struct_type( self, struct, * args ):
-        try:
-            fix_size_and_alignment( struct )
-        except Exception as exception:
-            if self.config.show_warnings:
-                print( 'Warning: ', exception )
-
-            struct.set_is_valid( False )
+        fix_size_and_alignment( struct )
 
 #
 # DetectPaddingVisitor
 #
 class DetectPaddingVisitor( ITypeVisitor ):
-    def __init__( self, config ):
+    def __init__( self ):
         ITypeVisitor.__init__( self )
 
-        self.config = config
-
     def visit_struct_type( self, struct, * args ):
-        try:
-            find_and_create_padding_members( struct )
-        except Exception as exception:
-            if self.config.show_warnings:
-                print( 'Warning: ', exception )
-
-            struct.set_is_valid( False )
+        find_and_create_padding_members( struct )
 
 #
 # CompactStructVisitor
 #
 class CompactStructVisitor( ITypeVisitor ):
-    def __init__( self, config ):
+    def __init__( self ):
         ITypeVisitor.__init__( self )
-
-        self.config = config
 
     def visit_struct_type( self, struct, * args ):
         if self._skip_type( struct ):
             return
 
-        if len( self.config.requested_types ) > 0:
-            if struct.get_name() not in self.config.requested_types:
-                return
-
-        struct_compacter = StructCompacter( self.config )
+        struct_compacter = StructCompacter()
         compacted = struct_compacter.process( struct )
         struct.set_packed( compacted )
 
@@ -1824,20 +1865,20 @@ class Application:
             print( 'Reading DWARF (may take some time)...' )
             types = self._read_DWARF( file_name )
 
-            if self.config.debug:
-                self._print_types( types )
+            #if self.config.debug:
+            #    self._print_types( types )
 
             print( 'Fixing types...' )
             types = self._fix_types( types )
 
-            if self.config.debug:
-                self._print_types( types )
+            #if self.config.debug:
+            #    self._print_types( types )
 
             print( 'Finding paddings...' )
             types = self._detect_padding( types )
 
-            if self.config.debug:
-                self._print_types( types )
+            #if self.config.debug:
+            #    self._print_types( types )
 
             print( 'Compacting classes...' )
             types = self._compact_types( types )
@@ -1848,10 +1889,9 @@ class Application:
             print( '... and finally:' )
             self._print_compacted( types )
             print( 'Done.' )
-
-        except Exception as e:
-            #print( 'File', file_name, 'skipped since', e )
-            raise
+           
+        except EBOException as e:
+            print( 'File', file_name, 'skipped since', e )
 
     # details
 
@@ -1897,26 +1937,48 @@ class Application:
                 print( '%x %s' % ( id, type.get_full_desc() ) )
 
     def _compact_types( self, types ):
-        visitor = CompactStructVisitor( self.config )
+        visitor = CompactStructVisitor()
 
         for id, type in types.items():
-            type.accept( visitor, None )
+            if len( self.config.requested_types ) > 0:
+                if type.get_name() not in self.config.requested_types:
+                    continue
+
+            try:
+                type.accept( visitor, None )
+            except EBOException as exception:
+                if self.config.show_warnings:
+                    print( 'Warning: ', exception )
+
+                type.set_is_valid( False )
 
         return types
 
     def _detect_padding( self, types ):
-        visitor = DetectPaddingVisitor( self.config )
+        visitor = DetectPaddingVisitor()
 
         for id, type in types.items():
-            type.accept( visitor, None )
+            try:
+                type.accept( visitor, None )
+            except EBOException as exception:
+                if self.config.show_warnings:
+                    print( 'Warning: ', exception )
+
+                type.set_is_valid( False )
 
         return types
 
     def _fix_types( self, types ):
-        visitor = FixSizeAlignmentVisitor( self.config )
+        visitor = FixSizeAlignmentVisitor()
 
         for id, type in types.items():
-            type.accept( visitor, None )
+            try:
+                type.accept( visitor, None )
+            except EBOException as exception:
+                if self.config.show_warnings:
+                    print( 'Warning: ', exception )
+
+                type.set_is_valid( False )
 
         return types
 
@@ -1928,8 +1990,8 @@ def process_argv():
     config = Config()
 
     config.output = 'stdout'
-    config.requested_types = set([ ])
-    config.show_warnings = False
+    config.requested_types = set( )
+    config.show_warnings = True
     config.debug = True
 
     return config
