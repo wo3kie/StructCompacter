@@ -107,7 +107,13 @@ def is_template_name( text ):
 def is_stl_internal_name( text ):
     precondition( len( text ) > 0 )
 
-    return text.startswith( '_' )
+    if text.startswith( '_' ):
+        return True
+
+    if text[0].islower():
+        return True
+
+    return False
 
 def is_vtpr( text ):
     precondition( len( text ) > 0 )
@@ -213,7 +219,7 @@ class Member( IMember ):
 
 class Padding( IMember ):
     def __init__( self, type, this_offset ):
-        IMember.__init__( self, ' ', type, this_offset )
+        IMember.__init__( self, '        ', type, this_offset )
 
     def is_moveable( self ):
         return True
@@ -377,6 +383,38 @@ class RefType( IType ):
     def _get_decoration_size( self ):
         return 1
 
+class ConstType( IType ):
+    def __init__( self, type, size ):
+        IType.__init__( self, 'Const', size )
+        self.type = type
+
+    # details
+
+    def _get_name( self ):
+        return self.type.get_name()
+
+    def _decorate_name( self, name ):
+        return 'c{' + name + '}'
+
+    def _get_decoration_size( self ):
+        return 3
+
+class VolatileType( IType ):
+    def __init__( self, type, size ):
+        IType.__init__( self, 'Volatile', size )
+        self.type = type
+
+    # details
+
+    def _get_name( self ):
+        return self.type.get_name()
+
+    def _decorate_name( self, name ):
+        return 'v{' + name + '}'
+
+    def _get_decoration_size( self ):
+        return 3
+
 class BaseType( IType ):
     def __init__( self, name, size ):
         IType.__init__( self, name, size )
@@ -434,7 +472,7 @@ class StructType( IType ):
 
         self.compacted = None
 
-    def set_compacted( self, compacted ):
+    def set_packed( self, compacted ):
         self.compacted = compacted
 
     def get_packed( self ):
@@ -657,6 +695,8 @@ class ITypeVisitor:
         self.dispatcher[ UnknownType ] = self.visit_unknown_type
         self.dispatcher[ PtrType ] = self.visit_ptr_type
         self.dispatcher[ RefType ] = self.visit_ref_type
+        self.dispatcher[ ConstType ] = self.visit_const_type
+        self.dispatcher[ VolatileType ] = self.visit_volatile_type
         self.dispatcher[ BaseType ] = self.visit_base_type
         self.dispatcher[ UnionType ] = self.visit_union_type
         self.dispatcher[ ArrayType ] = self.visit_array_type
@@ -674,6 +714,12 @@ class ITypeVisitor:
         return
 
     def visit_ref_type( self, ref, * args ):
+        return
+
+    def visit_const_type( self, const, * args ):
+        return
+
+    def visit_volatile_type( self, const, * args ):
         return
 
     def visit_base_type( self, base, * args ):
@@ -1024,9 +1070,6 @@ class StructCompacter:
             return None
 
         self.struct = struct
-
-        #if struct.get_name() != 'DRVInfo':
-        #    return None
 
         try:
             self._pack_members()
@@ -1406,7 +1449,7 @@ class CompactStructVisitor( ITypeVisitor ):
 
         struct_compacter = StructCompacter( self.config )
         compacted = struct_compacter.process( struct )
-        struct.set_compacted( compacted )
+        struct.set_packed( compacted )
 
     # details
 
@@ -1637,16 +1680,16 @@ class DIEReader:
             return type
         elif die.tag == 'DW_TAG_typedef':
             return type
-        elif die.tag == 'DW_TAG_const_type':
-            return type
-        elif die.tag == 'DW_TAG_volatile_type':
-            return type
         elif die.tag == 'DW_TAG_pointer_type':
             return PtrType( type, self.ptr_size )
         elif die.tag == 'DW_TAG_reference_type':
             return RefType( type, self.ref_size )
         elif die.tag == 'DW_TAG_array_type':
             return ArrayType( type )
+        elif die.tag == 'DW_TAG_const_type':
+            return ConstType( type, type.get_size() )
+        elif die.tag == 'DW_TAG_volatile_type':
+            return VolatileType( type, type.get_size() )
         else:
             return UnknownType()
 
@@ -1737,21 +1780,33 @@ class Application:
 
     def process( self, file_name ):
         try:
-            print( 'Reading DWARF...' )
+            print( 'Reading DWARF (may take some time)...' )
             types = self._read_DWARF( file_name )
+
+            if self.config.debug:
+                self._print_types( types )
 
             print( 'Fixing types...' )
             types = self._fix_types( types )
 
+            if self.config.debug:
+                self._print_types( types )
+
             print( 'Finding paddings...' )
             types = self._detect_padding( types )
+
+            if self.config.debug:
+                self._print_types( types )
 
             print( 'Compacting classes...' )
             types = self._compact_types( types )
 
-            print( '... and finally:' )
+            if self.config.debug:
+                self._print_types( types )
 
+            print( '... and finally:' )
             self._print_compacted( types )
+            print( 'Done.' )
 
         except Exception as e:
             print( 'File', file_name, 'skipped since', e )
@@ -1781,19 +1836,23 @@ class Application:
 
     def _print_types( self, types ):
         for id, type in types.items():
-            if type.get_name().count( '<' ) > 0:
+            if len( self.config.requested_types ) != 0:
+                if type._get_name() not in self.config.requested_types:
+                    continue
+
+            if is_template_name( type._get_name() ):
                 continue
 
-            if type._get_name().startswith( '_' ):
+            if is_stl_internal_name( type._get_name() ):
                 continue
 
             if not type.get_is_compactable():
                 continue
-
-            if calculate_total_padding( type ) == 0:
-                continue
-
-            print( '%x %s' % ( id, type.get_full_desc() ) )
+                
+            if type.get_packed():
+                print( '%x %s' % ( id, type.get_packed().get_full_desc() ) )
+            else:
+                print( '%x %s' % ( id, type.get_full_desc() ) )
 
     def _compact_types( self, types ):
         visitor = CompactStructVisitor( self.config )
@@ -1827,8 +1886,9 @@ def process_argv():
     config = Config()
 
     config.output = 'files'
-    config.requested_types = set([])
+    config.requested_types = set([ 'ShoppingTrx' ])
     config.show_warnings = False
+    config.debug = True
 
     return config
 
