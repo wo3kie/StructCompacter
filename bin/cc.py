@@ -213,7 +213,7 @@ class Member( IMember ):
 
 class Padding( IMember ):
     def __init__( self, type, this_offset ):
-        IMember.__init__( self, '__padding', type, this_offset )
+        IMember.__init__( self, ' ', type, this_offset )
 
     def is_moveable( self ):
         return True
@@ -317,8 +317,7 @@ class IType( IVisitable ):
         return self.size.get()
 
     def try_set_alignment( self, alignment ):
-        if( soft_check_alignment( alignment, self.get_size() ) ) == False:
-            print( alignment, self.get_size() )
+        precondition( soft_check_alignment( alignment, self.get_size() ) )
 
         return self.alignment.set( alignment )
 
@@ -567,8 +566,8 @@ def fix_size_and_alignment( struct ):
     members = struct.get_members()
 
     if len( members ) == 0:
-        struct.try_set_size( 1 )
-        struct.try_set_alignment( 1 )
+        struct.try_set_size( 99999 )
+        struct.try_set_alignment( math.min( struct.get_size(), 99999 ) )
 
         return
 
@@ -800,16 +799,34 @@ def print_diff_of_structs( struct1, struct2 ):
 # PrintDiffOfStructAndPackedStruct
 #
 class PrintDiffOfStructAndPackedStruct( ITypeVisitor ):
-    def __init__( self ):
+    def __init__( self, config ):
         ITypeVisitor.__init__( self )
+
+        self.config = config
 
     def visit_struct_type( self, struct, * args ):
         if not struct.get_packed():
             return
 
-        print_diff_of_structs( struct, struct.get_packed() )
+        if self.config.output == 'stdout':
+            self._print_to_stdout( struct )
+        else:
+            self._print_to_file( struct )
 
+    def _print_to_stdout( self, struct ):
+        print_diff_of_structs( struct, struct.get_packed() )
         print( '\n' )
+
+    def _print_to_file( self, struct ):
+        file_name = struct.get_name() + '.cc'
+        file = open( file_name, 'w' )
+
+        print( 'File', file_name, 'created.' )
+
+        sys.stdout = file
+        print_diff_of_structs( struct, struct.get_packed() )
+        file.close()
+        sys.stdout = sys.__stdout__
 
 #
 # INode
@@ -870,7 +887,7 @@ class PaddingNode( INode ):
     def __init__( self, type, this_offset ):
         INode.__init__( self, '__padding', type, this_offset )
 
-    def try_set_size( self, size ):
+    def set_size( self, size ):
         precondition( check_size( size ) )
 
         self._set_type( PaddingType( size ) )
@@ -987,7 +1004,9 @@ class NodeToTypeConversionVisitor( INodeVisitor ):
 # StructCompacter
 #
 class StructCompacter:
-    def __init__( self ):
+    def __init__( self, config ):
+        self.config = config
+
         self.type_to_node_conversion_visitor = TypesToNodesConversionVisitor()
 
         self.members_front = HeadNode()
@@ -1023,8 +1042,11 @@ class StructCompacter:
             result.set_members( StructCompacter._convert_nodes_to_members( self.__front().next ) )
 
             return result
+
         except Exception as exception:
-            print( 'Warning', exception )
+            if self.config.show_warnings:
+                print( 'Warning', exception )
+
             return None
 
     def dispatch( self, object1, object2 ):
@@ -1093,7 +1115,7 @@ class StructCompacter:
             return
 
         back_padding = PaddingNode( PaddingType( back_padding_size ), struct_end )
-        self._add_unaligned_member( back_padding )
+        self.__append( back_padding )
 
     def _process_padding_end( self, tail, end ):
         back_padding_this_offset = tail.get_this_offset()
@@ -1101,27 +1123,31 @@ class StructCompacter:
             = Alignment.get_aligned_up( back_padding_this_offset, self.struct.get_alignment() )
 
         back_padding_new_size = aligned_struct_end - back_padding_this_offset
+        back_padding_new_size = back_padding_new_size % self.struct.get_alignment()
 
         if back_padding_new_size == 0:
             self.__pop_back()
         elif tail.get_size() != back_padding_new_size:
-            tail.try_set_size( back_padding_new_size )
+            tail.set_size( back_padding_new_size )
 
     def _process_padding_padding( self, tail, padding ):
         total_padding_size = tail.get_size() + padding.get_size()
         total_padding_size = total_padding_size % self.struct.get_alignment()
 
-        tail.try_set_size( total_padding_size )
+        if total_padding_size == 0:
+            self.__pop_back()
+        elif tail.get_size() != total_padding_size:
+            tail.set_size( total_padding_size )
 
     def _process_padding_member( self, tail, member ):
         member_size = member.get_size()
         member_alignment = member.get_type().get_alignment()
 
-        padding_node \
+        found_padding \
             = StructCompacter._find_matching_padding( self.__front(), member_size, member_alignment )
 
-        if padding_node != None:
-            self._move_member_into_padding( padding_node, member )
+        if found_padding != None:
+            self._move_member_into_padding( found_padding, member )
         elif self._try_shrink_padding_right( tail, member ):
             return
         else:
@@ -1129,7 +1155,7 @@ class StructCompacter:
 
     def _process_member_padding( self, tail, padding ):
         padding.set_this_offset( self._get_aligned_struct_size( padding.get_type().get_alignment() ) )
-        self._add_unaligned_member( padding )
+        self.__append( padding )
 
     def _process_member_member( self, tail, member ):
         member_size = member.get_size()
@@ -1143,7 +1169,7 @@ class StructCompacter:
 
     def _process_inheritance_padding( self, tail, padding ):
         padding.set_this_offset( self._get_aligned_struct_size( padding.get_type().get_alignment() ) )
-        self._add_unaligned_member( padding )
+        self.__append( padding )
 
     def _process_inheritance_inheritance( self, tail, inheritance ):
         self._add_unaligned_member( inheritance )
@@ -1153,15 +1179,15 @@ class StructCompacter:
 
     def _process_head_inheritance( self, tail, inheritance ):
         inheritance.set_this_offset( 0 )
-        self._add_unaligned_member( inheritance )
+        self.__append( inheritance )
 
     def _process_head_member( self, tail, member ):
         member.set_this_offset( 0 )
-        self._add_unaligned_member( member )
+        self.__append( member )
 
     def _process_head_padding( self, tail, padding ):
-        member.set_this_offset( 0 )
-        self._add_unaligned_member( padding )
+        padding.set_this_offset( 0 )
+        self.__append( padding )
 
     #
     # details
@@ -1184,7 +1210,7 @@ class StructCompacter:
         elif padding.get_size() < member.get_type().get_alignment():
             return False
         else:
-            padding.try_set_size( padding.get_size() % member.get_type().get_alignment() )
+            padding.set_size( padding.get_size() % member.get_type().get_alignment() )
 
         self._add_unaligned_member( member )
 
@@ -1196,25 +1222,25 @@ class StructCompacter:
 
         return aligned_struct_size
 
-    def _add_unaligned_member( self, node ):
-        node.set_this_offset( self._get_aligned_struct_size( node.get_type().get_alignment() ) )
+    def _add_unaligned_member( self, member ):
+        member.set_this_offset( self._get_aligned_struct_size( member.get_type().get_alignment() ) )
 
-        alignment_padding = self._get_alignment_padding( node )
+        alignment_padding = self._get_alignment_padding( member )
 
         if alignment_padding:
             self.dispatch( self.__back(), alignment_padding )
 
-        self.__append( node )
+        self.__append( member )
 
-    def _get_alignment_padding( self, node ):
+    def _get_alignment_padding( self, member ):
         struct_end = self.__back().get_this_offset() + self.__back().get_size()
-        alignment_padding_size = node.get_this_offset() - struct_end
+        alignment_padding_size = member.get_this_offset() - struct_end
 
         if alignment_padding_size == 0:
             return None
 
         padding_type = PaddingType( alignment_padding_size )
-        return PaddingNode( padding_type, None )
+        return PaddingNode( padding_type, struct_end )
 
     def _move_member_into_padding( self, padding, member ):
         if padding.get_size() == member.get_size():
@@ -1243,7 +1269,7 @@ class StructCompacter:
         member.set_this_offset( member_new_this_offset )
 
         if front_padding_size != 0 and right_padding_size != 0:
-            padding.try_set_size( member_new_this_offset - padding.this_offset )
+            padding.set_size( member_new_this_offset - padding.this_offset )
 
             new_padding = PaddingNode( PaddingType( right_padding_size ), back_padding_this_offset )
 
@@ -1251,12 +1277,12 @@ class StructCompacter:
             self.__insert( member, new_padding )
 
         elif front_padding_size != 0:
-            padding.try_set_size( front_padding_size )
+            padding.set_size( front_padding_size )
 
             self.__insert( padding, member )
 
         elif right_padding_size != 0:
-            padding.try_set_size( right_padding_size )
+            padding.set_size( right_padding_size )
             padding.set_this_offset( padding.get_this_offset() + member.get_size() )
 
             self.__insert( padding.prev, member )
@@ -1333,14 +1359,18 @@ class StructCompacter:
 # FixSizeAlignmentVisitor
 #
 class FixSizeAlignmentVisitor( ITypeVisitor ):
-    def __init__( self ):
+    def __init__( self, config ):
         ITypeVisitor.__init__( self )
+
+        self.config = config
 
     def visit_struct_type( self, struct, * args ):
         try:
             fix_size_and_alignment( struct )
         except Exception as exception:
-            print( 'Warning: ', exception )
+            if self.config.show_warnings:
+                print( 'Warning: ', exception )
+
             struct.set_is_valid( False )
 
 #
@@ -1361,17 +1391,21 @@ class DetectPaddingVisitor( ITypeVisitor ):
 # CompactStructVisitor
 #
 class CompactStructVisitor( ITypeVisitor ):
-    def __init__( self ):
+    def __init__( self, config ):
         ITypeVisitor.__init__( self )
+
+        self.config = config
 
     def visit_struct_type( self, struct, * args ):
         if self._skip_type( struct ):
             return
 
-        struct_compacter = StructCompacter()
+        if len( self.config.requested_types ) > 0:
+            if struct.get_name() not in self.config.requested_types:
+                return
 
+        struct_compacter = StructCompacter( self.config )
         compacted = struct_compacter.process( struct )
-
         struct.set_compacted( compacted )
 
     # details
@@ -1695,33 +1729,43 @@ class DIEReader:
 # Application
 #
 class Application:
-    def __init__( self ):
-        self.dies = {}
+    def __init__( self, config ):
+        self.config = config
 
+        self.dies = {}
         self.die_reader = DIEReader()
 
     def process( self, file_name ):
-        types = self._read_DWARF( file_name )
-        types = self._fix_types( types )
-        types = self._detect_padding( types )
-        types = self._compact_types( types )
-        self._print_result( types )
+        try:
+            print( 'Reading DWARF...' )
+            types = self._read_DWARF( file_name )
+
+            print( 'Fixing types...' )
+            types = self._fix_types( types )
+
+            print( 'Finding paddings...' )
+            types = self._detect_padding( types )
+
+            print( 'Compacting classes...' )
+            types = self._compact_types( types )
+
+            print( '... and finally:' )
+
+            self._print_compacted( types )
+
+        except Exception as e:
+            print( 'File', file_name, 'skipped since', e )
 
     # details
 
     def _read_DWARF( self, file_name ):
         with open( file_name, 'rb' ) as file:
-            try:
-                elfFile = ELFFile( file )
-            except ELFError:
-                print( "Could not open ELF file: %s" % file_name )
-            else:
-                return self._read_DWARF_impl( elfFile )
+            elfFile = ELFFile( file )
+            return self._read_DWARF_impl( elfFile )
 
     def _read_DWARF_impl( self, elfFile ):
         if not elfFile.has_dwarf_info():
-            print( "File %s has no DWARF info" % file_name )
-            return
+            raise Exception( "File %s has no DWARF info" % file_name )
 
         dwarfInfo = elfFile.get_dwarf_info()
         return self.die_reader.process( dwarfInfo )
@@ -1729,13 +1773,13 @@ class Application:
     def _get_types( self ):
         return self.die_reader.get_types()
 
-    def _print_result( self, types ):
-        print_output_visitor = PrintDiffOfStructAndPackedStruct()
+    def _print_compacted( self, types ):
+        print_output_visitor = PrintDiffOfStructAndPackedStruct( self.config )
 
         for id, type in types.items():
             type.accept( print_output_visitor, None )
 
-    def __print_result( self, types ):
+    def _print_types( self, types ):
         for id, type in types.items():
             if type.get_name().count( '<' ) > 0:
                 continue
@@ -1752,7 +1796,7 @@ class Application:
             print( '%x %s' % ( id, type.get_full_desc() ) )
 
     def _compact_types( self, types ):
-        visitor = CompactStructVisitor()
+        visitor = CompactStructVisitor( self.config )
 
         for id, type in types.items():
             type.accept( visitor, None )
@@ -1768,17 +1812,31 @@ class Application:
         return types
 
     def _fix_types( self, types ):
-        visitor = FixSizeAlignmentVisitor()
+        visitor = FixSizeAlignmentVisitor( self.config )
 
         for id, type in types.items():
             type.accept( visitor, None )
 
         return types
 
+class Config:
+    def __init__( self ):
+        self.output = None
+
+def process_argv():
+    config = Config()
+
+    config.output = 'files'
+    config.requested_types = set([])
+    config.show_warnings = False
+
+    return config
+
 def main():
-    for file_name in sys.argv[1:]:
-        app = Application()
-        app.process( file_name )
+    config = process_argv()
+
+    app = Application( config )
+    app.process( sys.argv[ 1 ] )
 
 if __name__ == "__main__":
     main()
