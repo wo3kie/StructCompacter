@@ -285,6 +285,8 @@ class IType( IVisitable ):
 
         self.alignment = ConditionalStorage( greater_than, None )
 
+        self.is_declaration = False
+
     def set_name( self, name ):
         precondition( check_name( name ) )
 
@@ -332,6 +334,24 @@ class IType( IVisitable ):
 
     def get_is_compactable( self ):
         return False
+
+    def set_is_declaration( self, is_declaration ):
+        self.is_declaration = is_declaration
+
+    def get_is_declaration( self ):
+        return self.is_declaration
+
+    def get_is_well_defined( self ):
+        if self.get_is_declaration():
+            return False
+
+        if self.get_size() == 0:
+            return False
+
+        if self.get_alignment() == None:
+            return False
+
+        return True
 
     # details
 
@@ -468,7 +488,7 @@ class StructType( IType ):
 
         self.is_valid = True
 
-        self.components = []
+        self.members = []
 
         self.compacted = None
 
@@ -494,11 +514,14 @@ class StructType( IType ):
         result += str( alignment )
         result += ')'
 
-        if self.get_is_valid() == False:
+        if self.get_is_declaration() == True:
+            result += ' (D)'
+
+        if self.get_is_well_defined() == False:
             result += ' (!)'
 
-        for comp in self.components:
-            result += '\n\t' + comp.get_brief_desc()
+        for member in self.members:
+            result += '\n\t' + member.get_brief_desc()
 
         return result
 
@@ -506,13 +529,13 @@ class StructType( IType ):
         if member == None:
             return
 
-        self.components.append( member )
+        self.members.append( member )
 
     def get_members( self ):
-        return self.components
+        return self.members
 
     def set_members( self, members ):
-        self.components = members
+        self.members = members
 
     def get_is_valid( self ):
         return self.is_valid
@@ -521,6 +544,22 @@ class StructType( IType ):
         self.is_valid = is_valid
 
     def get_is_compactable( self ):
+        return True
+
+    def get_is_well_defined( self ):
+        if self.get_size() == 0:
+            return False
+
+        if self.get_alignment() == None:
+            return False
+
+        if self.get_is_declaration():
+            return False
+
+        for member in self.members:
+            if member.get_type().get_is_well_defined() == False:
+                return False
+
         return True
 
     # details
@@ -598,9 +637,6 @@ class Alignment:
 # fix_size_and_alignment
 #
 def fix_size_and_alignment( struct ):
-    if struct.get_is_valid() == False:
-        return
-
     members = struct.get_members()
 
     if len( members ) == 0:
@@ -649,9 +685,6 @@ def find_and_create_padding_members( struct ):
     def _create_padding( previous_member, padding_size ):
         padding_this_offset = previous_member.get_this_offset() + previous_member.get_size()
         return Padding( PaddingType( padding_size ), padding_this_offset )
-
-    if struct.get_is_valid() == False:
-        return
 
     members = struct.get_members()
     members_and_paddings = []
@@ -1063,7 +1096,11 @@ class StructCompacter:
         self.struct = None
 
     def process( self, struct ):
-        if struct.get_is_valid() == False:
+        if len( self.config.requested_types ):
+            if struct._get_name() not in self.config.requested_types:
+                return None
+
+        if struct.get_is_well_defined() == False:
             return None
 
         if calculate_total_padding( struct ) < struct.get_alignment():
@@ -1077,8 +1114,8 @@ class StructCompacter:
             packed_struct_size \
                 = self.__back().get_this_offset() + self.__back().get_size()
 
-            if struct.get_size() == packed_struct_size:
-                return None
+            #if struct.get_size() == packed_struct_size:
+            #    return None
 
             result = StructType( struct.get_name(), packed_struct_size )
             result.try_set_alignment( struct.get_alignment() )
@@ -1088,7 +1125,7 @@ class StructCompacter:
 
         except Exception as exception:
             if self.config.show_warnings:
-                print( 'Warning', exception )
+                print( 'Warning:', exception )
 
             return None
 
@@ -1420,14 +1457,18 @@ class FixSizeAlignmentVisitor( ITypeVisitor ):
 # DetectPaddingVisitor
 #
 class DetectPaddingVisitor( ITypeVisitor ):
-    def __init__( self ):
+    def __init__( self, config ):
         ITypeVisitor.__init__( self )
+
+        self.config = config
 
     def visit_struct_type( self, struct, * args ):
         try:
             find_and_create_padding_members( struct )
         except Exception as exception:
-            print( 'Warning: ', exception )
+            if self.config.show_warnings:
+                print( 'Warning: ', exception )
+
             struct.set_is_valid( False )
 
 #
@@ -1725,13 +1766,13 @@ class DIEReader:
 
         try:
             return self.types[ die.offset ]
-
         except KeyError:
             struct = StructType( '__not_know_yet__', None )
             self.types[ die.offset ] = struct
 
         struct.set_name( DIE.get_name( die, self.dies ) )
         struct.try_set_size( DIE.get_size( die ) )
+        struct.set_is_declaration( DIE.is_declaration( die ) )
 
         for child in die.iter_children():
             if DIE.is_inheritance( child ):
@@ -1809,7 +1850,8 @@ class Application:
             print( 'Done.' )
 
         except Exception as e:
-            print( 'File', file_name, 'skipped since', e )
+            #print( 'File', file_name, 'skipped since', e )
+            raise
 
     # details
 
@@ -1848,7 +1890,7 @@ class Application:
 
             if not type.get_is_compactable():
                 continue
-                
+
             if type.get_packed():
                 print( '%x %s' % ( id, type.get_packed().get_full_desc() ) )
             else:
@@ -1863,7 +1905,7 @@ class Application:
         return types
 
     def _detect_padding( self, types ):
-        visitor = DetectPaddingVisitor()
+        visitor = DetectPaddingVisitor( self.config )
 
         for id, type in types.items():
             type.accept( visitor, None )
@@ -1885,8 +1927,8 @@ class Config:
 def process_argv():
     config = Config()
 
-    config.output = 'files'
-    config.requested_types = set([ 'ShoppingTrx' ])
+    config.output = 'stdout'
+    config.requested_types = set([ ])
     config.show_warnings = False
     config.debug = True
 
