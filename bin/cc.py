@@ -1,5 +1,7 @@
 # Class Compacter
 
+import argparse
+import os
 import sys
 
 from math import ceil
@@ -108,9 +110,6 @@ def is_stl_internal_name( text ):
     precondition( len( text ) > 0 )
 
     if text.startswith( '_' ):
-        return True
-
-    if text[0].islower():
         return True
 
     return False
@@ -894,7 +893,7 @@ def calculate_total_padding( struct ):
     return total_padding_visitor.get()
 
 
-def print_diff_of_structs( struct1, struct2 ):
+def print_diff_of_structs( struct1, struct2, width ):
     def _format( member, width ):
         this_offset = ' (+' + str( member.get_this_offset() ) + ')'
         this_offset_len = len( this_offset )
@@ -909,8 +908,6 @@ def print_diff_of_structs( struct1, struct2 ):
             ('{: <' + str( name_len ) + '}').format( name ) \
             + ('{: >' + str( this_offset_len ) + '}').format( this_offset ) \
             + ('{: <' + str( type_len ) + '}').format( type )
-
-    width = 50
 
     struct_name = struct1.get_name()
     struct1_size = str( struct1.get_size() )
@@ -962,7 +959,7 @@ class PrintDiffOfStructAndPackedStruct( ITypeVisitor ):
             self._print_to_file( struct )
 
     def _print_to_stdout( self, struct ):
-        print_diff_of_structs( struct, struct.get_packed() )
+        print_diff_of_structs( struct, struct.get_packed(), self.config.columns )
         print( '\n' )
 
     def _print_to_file( self, struct ):
@@ -1187,7 +1184,7 @@ class StructCompacter:
             return result
 
         except EBOException as exception:
-            if self.config.show_warnings:
+            if self.config.warnings:
                 print( 'Warning:', exception )
 
             return None
@@ -1865,31 +1862,22 @@ class Application:
             print( 'Reading DWARF (may take some time)...' )
             types = self._read_DWARF( file_name )
 
-            #if self.config.debug:
-            #    self._print_types( types )
-
             print( 'Fixing types...' )
             types = self._fix_types( types )
-
-            #if self.config.debug:
-            #    self._print_types( types )
 
             print( 'Finding paddings...' )
             types = self._detect_padding( types )
 
-            #if self.config.debug:
-            #    self._print_types( types )
+            if self.config.debug:
+                self._print_types( types )
 
             print( 'Compacting classes...' )
             types = self._compact_types( types )
 
-            if self.config.debug:
-                self._print_types( types )
-
             print( '... and finally:' )
             self._print_compacted( types )
             print( 'Done.' )
-           
+
         except EBOException as e:
             print( 'File', file_name, 'skipped since', e )
 
@@ -1918,8 +1906,8 @@ class Application:
 
     def _print_types( self, types ):
         for id, type in types.items():
-            if len( self.config.requested_types ) != 0:
-                if type._get_name() not in self.config.requested_types:
+            if len( self.config.types ) != 0:
+                if type._get_name() not in self.config.types:
                     continue
 
             if is_template_name( type._get_name() ):
@@ -1940,14 +1928,14 @@ class Application:
         visitor = CompactStructVisitor()
 
         for id, type in types.items():
-            if len( self.config.requested_types ) > 0:
-                if type.get_name() not in self.config.requested_types:
+            if len( self.config.types ) > 0:
+                if type.get_name() not in self.config.types:
                     continue
 
             try:
                 type.accept( visitor, None )
             except EBOException as exception:
-                if self.config.show_warnings:
+                if self.config.warnings:
                     print( 'Warning: ', exception )
 
                 type.set_is_valid( False )
@@ -1961,7 +1949,7 @@ class Application:
             try:
                 type.accept( visitor, None )
             except EBOException as exception:
-                if self.config.show_warnings:
+                if self.config.warnings:
                     print( 'Warning: ', exception )
 
                 type.set_is_valid( False )
@@ -1975,32 +1963,86 @@ class Application:
             try:
                 type.accept( visitor, None )
             except EBOException as exception:
-                if self.config.show_warnings:
+                if self.config.warnings:
                     print( 'Warning: ', exception )
 
                 type.set_is_valid( False )
 
         return types
 
-class Config:
-    def __init__( self ):
-        self.output = None
+def process_argv( argv ):
+    parser = argparse.ArgumentParser(
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        description =
+            "ClassCompacter reads object (*.o) file in ELF format and using DWARF debug info"
+            " detects types and theirs members, calculates padding and tries such shuffle with"
+            " members to minimalize padding space.",
 
-def process_argv():
-    config = Config()
+        epilog =
+            "Examples:\n"
+            "cc.py application.o\n"
+            "cc.py -d -t SomeType application.o\n"
+            "cc.py -o stdout application.o\n"
+            "Author: Lukasz Czerwinski (wo3kie@gmail.com)(https://github.com/wo3kie/ClassCompacter)"
+    )
 
-    config.output = 'stdout'
-    config.requested_types = set( )
-    config.show_warnings = True
-    config.debug = True
+    parser.add_argument(
+        '-t', '--types',
+        default=[],
+        nargs='+',
+        help=
+            'Process only particular types.'
+    )
 
-    return config
+    parser.add_argument(
+        '-d', '--debug',
+        action='store_true',
+        default=False,
+        help=
+            'Print debug information.'
+    )
+
+    parser.add_argument(
+        '-o', '--output',
+        default='files',
+        help=
+            'Output redirection (files/stdout).'
+    )
+
+    parser.add_argument(
+        '-w', '--warnings',
+        action='store_true',
+        default=False,
+        help=
+            'Show warnings.'
+    )
+
+    parser.add_argument(
+        '-c', '--columns',
+        default=50,
+        type=int,
+        help=
+            'Width of output in columns (Not less than 40).'
+    )
+
+    parser.add_argument(
+        'file',
+        nargs=1,
+        help=
+            'Object file to be processed.'
+    )
+
+    result = parser.parse_args( argv )
+
+    result.columns = max( 40, result.columns )
+
+    return result
 
 def main():
-    config = process_argv()
+    config = process_argv( sys.argv[1:] )
 
     app = Application( config )
-    app.process( sys.argv[ 1 ] )
+    app.process( config.file[0] )
 
 if __name__ == "__main__":
     main()
