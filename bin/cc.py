@@ -277,10 +277,7 @@ class IType( IVisitable ):
 
         self.name = name
 
-        if size == None:
-            self.size = ConditionalStorage( greater_than, None )
-        else:
-            self.size = ConditionalStorage( false_predicate, size )
+        self.size = size
 
         self.alignment = ConditionalStorage( greater_than, None )
 
@@ -315,13 +312,13 @@ class IType( IVisitable ):
 
         return result
 
-    def try_set_size( self, size ):
-        precondition( soft_check_size( size ) )
-
-        return self.size.set( size )
+    #def try_set_size( self, size ):
+    #    precondition( soft_check_size( size ) )
+    #
+    #    return self.size.set( size )
 
     def get_size( self ):
-        return self.size.get()
+        return self.size
 
     def try_set_alignment( self, alignment ):
         precondition( soft_check_alignment( alignment, self.get_size() ) )
@@ -357,12 +354,33 @@ class IType( IVisitable ):
     def _get_decoration_size( self ):
         return 0
 
+class DeclarationType( IType ):
+    def __init__( self, name ):
+        IType.__init__( self, name, None )
+
+    def set_size( self, size ):
+        self.size = size
+
+    def _decorate_name( self, name ):
+        return 'd{' + name + '}'
+
+    def _get_decoration_size( self ):
+        return 3
+
 class UnknownType( IType ):
-    def __init__( self ):
+    def __init__( self, desc ):
         IType.__init__( self, 'unknown', None )
+
+        self.desc = desc
+
+    def set_size( self, size ):
+        self.size = size
 
     def get_alignment( self ):
         return 1
+
+    def __str__( self ):
+        return 'Unknown: ' + self.desc
 
 class PtrType( IType ):
     def __init__( self, type, size ):
@@ -409,8 +427,8 @@ class RefType( IType ):
         return 1
 
 class ConstType( IType ):
-    def __init__( self, type, size ):
-        IType.__init__( self, 'Const', size )
+    def __init__( self, type ):
+        IType.__init__( self, 'Const', None )
         self.type = type
 
     def get_is_completely_defined( self ):
@@ -418,6 +436,12 @@ class ConstType( IType ):
 
     def get_is_well_defined( self ):
         return self.type.get_is_well_defined()
+
+    def get_size( self ):
+        return self.type.get_size()
+
+    def set_size( self, size ):
+        set_size( self.type, size )
 
     # details
 
@@ -431,9 +455,15 @@ class ConstType( IType ):
         return 3
 
 class VolatileType( IType ):
-    def __init__( self, type, size ):
-        IType.__init__( self, 'Volatile', size )
+    def __init__( self, type ):
+        IType.__init__( self, 'Volatile', None )
         self.type = type
+
+    def get_size( self ):
+        return self.type.get_size()
+
+    def set_size( self, size ):
+        set_size( self.type, size )
 
     def get_is_completely_defined( self ):
         return self.type.get_is_well_defined()
@@ -485,6 +515,9 @@ class ArrayType( IType ):
         IType.__init__( self, 'Array', None )
 
         self.type = type
+
+    def set_size( self, size ):
+        self.size = size
 
     def get_is_completely_defined( self ):
         return self.get_type().get_is_well_defined()
@@ -642,6 +675,9 @@ class PaddingType( IType ):
     def __init__( self, size ):
         IType.__init__( self, 'Padding', size )
 
+    def set_size( self, size ):
+        self.size = size
+
     def get_alignment( self ):
         return 1
 
@@ -708,7 +744,6 @@ def fix_size_and_alignment( struct ):
     members = struct.get_members()
 
     if len( members ) == 0:
-        struct.try_set_size( 128 * 128 )
         struct.try_set_alignment( min( struct.get_size(), 8 ) )
 
         return
@@ -724,7 +759,8 @@ def fix_size_and_alignment( struct ):
         if member_size <= 0:
             raise EBOException( 'EBO for type %s' % struct.get_name() )
 
-        current.get_type().try_set_size( member_size )
+        if current.get_type().get_size() == None:
+            set_size( current.get_type(), member_size )
 
         alignment \
             = Alignment.get_from_position( current.get_this_offset(), current.get_type().get_size() )
@@ -739,7 +775,8 @@ def fix_size_and_alignment( struct ):
     if member_size <= 0:
         raise EBOException( 'EBO for type %s' % struct.get_name() )
 
-    current.get_type().try_set_size( member_size )
+    if current.get_type().get_size() == None:
+        set_size( current.get_type(), member_size )
 
     alignment \
         = Alignment.get_from_position( current.get_this_offset(), current.get_type().get_size() )
@@ -789,11 +826,18 @@ def find_and_create_padding_members( struct ):
 #
 # ITypeVisitor for IType hierarchy
 #
+
+def default_type_handler( type, * args ):
+    return None
+
 class ITypeVisitor:
-    def __init__( self ):
+    def __init__( self, default_handler = default_type_handler ):
+        self.default_handler = default_handler
+
         self.dispatcher = {}
 
         self.dispatcher[ UnknownType ] = self.visit_unknown_type
+        self.dispatcher[ DeclarationType ] = self.visit_declaration_type
         self.dispatcher[ PtrType ] = self.visit_ptr_type
         self.dispatcher[ RefType ] = self.visit_ref_type
         self.dispatcher[ ConstType ] = self.visit_const_type
@@ -809,46 +853,86 @@ class ITypeVisitor:
         self.dispatcher[ interface.__class__ ]( interface, * args )
 
     def visit_unknown_type( self, unknown, * args ):
-        return
-
-    def visit_ptr_type( self, ptr, * args ):
-        return
-
-    def visit_ref_type( self, ref, * args ):
-        return
-
-    def visit_const_type( self, const, * args ):
-        return
-
-    def visit_volatile_type( self, const, * args ):
-        return
-
-    def visit_base_type( self, base, * args ):
-        return
-
-    def visit_union_type( self, union, * args ):
-        return
+        return self.default_handler( unknown, * args )
 
     def visit_declaration_type( self, declaration, * args ):
-        return
+        return self.default_handler( declaration, * args )
+
+    def visit_ptr_type( self, ptr, * args ):
+        return self.default_handler( ptr, * args )
+
+    def visit_ref_type( self, ref, * args ):
+        return self.default_handler( ref, * args )
+
+    def visit_const_type( self, const, * args ):
+        return self.default_handler( const, * args )
+
+    def visit_volatile_type( self, volatile, * args ):
+        return self.default_handler( volatile, * args )
+
+    def visit_base_type( self, base, * args ):
+        return self.default_handler( base, * args )
+
+    def visit_union_type( self, union, * args ):
+        return self.default_handler( union, * args )
+
+    def visit_declaration_type( self, declaration, * args ):
+        return self.default_handler( declaration, * args )
 
     def visit_array_type( self, array, * args ):
-        return
+        return self.default_handler( array, * args )
 
     def visit_struct_type( self, struct, * args ):
-        return
+        return self.default_handler( struct, * args )
 
     def visit_enum_type( self, enum, * args ):
-        return
+        return self.default_handler( enum, * args )
 
     def visit_padding_type( self, padding, * args ):
-        return
+        return self.default_handler( padding, * args )
+
+def type_error_exception( type, * args ):
+    raise TypeError( str( type ) )
+
+class SetTypeSizeVisitor( ITypeVisitor ):
+    def __init__( self, size ):
+        ITypeVisitor.__init__( self, type_error_exception )
+
+        self.size = size
+
+    def visit_declaration_type( self, declaration, * args ):
+        declaration.set_size( self.size )
+
+    def visit_array_type( self, array, * args ):
+        array.set_size( self.size )
+
+    def visit_padding_type( self, padding, * args ):
+        padding.set_size( self.size )
+
+    def visit_unknown_type( self, unknown, * args ):
+        unknown.set_size( self.size )
+
+    def visit_const_type( self, const, * args ):
+        const.set_size( self.size )
+
+    def visit_volatile_type( self, volatile, * args ):
+        volatile.set_size( self.size )
+
+def set_size( struct, size ):
+    visitor = SetTypeSizeVisitor( size )
+
+    struct.accept( visitor )
 
 #
 # IMemberVisitor
 #
+def default_member_handler( member, * args ):
+    return None
+
 class IMemberVisitor:
-    def __init__( self ):
+    def __init__( self, default_handler = default_member_handler ):
+        self.default_handler = default_handler
+
         self.dispatcher = {}
 
         self.dispatcher[ Member ] = self.visit_member
@@ -859,13 +943,13 @@ class IMemberVisitor:
         self.dispatcher[ interface.__class__ ]( interface, * args )
 
     def visit_member( self, member, * args ):
-        return
+        return self.default_handler( member, * args )
 
     def visit_inheritance( self, inheritance, * args ):
-        return
+        return self.default_handler( inheritance, * args )
 
     def visit_padding( self, padding, * args ):
-        return
+        return self.default_handler( padding, * args )
 
 #
 # CalculateTotalPaddingVisitor
@@ -988,7 +1072,7 @@ class INode( IMember ):
 
 class HeadNode( INode ):
     def __init__( self ):
-        INode.__init__( self, 'Head', UnknownType(), None )
+        INode.__init__( self, 'Head', UnknownType( 'HeadNode' ), None )
 
     def get_this_offset( self ):
         return 0
@@ -1001,7 +1085,7 @@ class HeadNode( INode ):
 
 class EndNode( INode ):
     def __init__( self ):
-        INode.__init__( self, 'End', UnknownType(), None )
+        INode.__init__( self, 'End', UnknownType( 'EndNode' ), None )
 
     def get_this_offset( self ):
         return 0
@@ -1044,8 +1128,13 @@ class PaddingNode( INode ):
 #
 # INodeVisitor
 #
+def default_node_handler( node, * args ):
+    return None
+
 class INodeVisitor:
-    def __init__( self ):
+    def __init__( self, default_handler = default_node_handler ):
+        self.default_handler = default_handler
+
         self.dispatcher = {}
 
         self.dispatcher[ HeadNode ] = self.visit_head_node
@@ -1057,16 +1146,16 @@ class INodeVisitor:
         self.dispatcher[ node.__class__ ]( node, * args )
 
     def visit_head_node( self, head, * args ):
-        return
+        return self.default_handler( head, * args )
 
     def visit_member_node( self, member, * args ):
-        return
+        return self.default_handler( member, * args )
 
     def visit_inheritance_node( self, inheritance, * args ):
-        return
+        return self.default_handler( inheritance, * args )
 
     def visit_padding_node( self, padding, * args ):
-        return
+        return self.default_handler( padding, * args )
 
 #
 # TypesToNodesConversionVisitor
@@ -1084,7 +1173,7 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
         self.node = MemberNode( member.get_name(), member.get_type(), None )
 
     def visit_padding( self, padding, * args ):
-        self.node = PaddingNode( padding.get_type(), None )
+        self.node = PaddingNode( PaddingType( padding.get_type().get_size() ), None )
 
     def get_node( self ):
         return self.node
@@ -1268,7 +1357,7 @@ class StructCompacter:
         if back_padding_new_size == 0:
             self.__pop_back()
         elif tail.get_size() != back_padding_new_size:
-            tail.set_size( back_padding_new_size )
+            set_size( tail.get_type(), back_padding_new_size )
 
     def _process_padding_padding( self, tail, padding ):
         total_padding_size = tail.get_size() + padding.get_size()
@@ -1277,7 +1366,7 @@ class StructCompacter:
         if total_padding_size == 0:
             self.__pop_back()
         elif tail.get_size() != total_padding_size:
-            tail.set_size( total_padding_size )
+            set_size( tail.get_type(), total_padding_size )
 
     def _process_padding_member( self, tail, member ):
         member_size = member.get_size()
@@ -1350,7 +1439,7 @@ class StructCompacter:
         elif padding.get_size() < member.get_type().get_alignment():
             return False
         else:
-            padding.set_size( padding.get_size() % member.get_type().get_alignment() )
+            set_size( padding.get_type(), padding.get_size() % member.get_type().get_alignment() )
 
         self._add_unaligned_member( member )
 
@@ -1409,7 +1498,7 @@ class StructCompacter:
         member.set_this_offset( member_new_this_offset )
 
         if front_padding_size != 0 and right_padding_size != 0:
-            padding.set_size( member_new_this_offset - padding.this_offset )
+            set_size( padding.get_type(), member_new_this_offset - padding.this_offset )
 
             new_padding = PaddingNode( PaddingType( right_padding_size ), back_padding_this_offset )
 
@@ -1417,12 +1506,12 @@ class StructCompacter:
             self.__insert( member, new_padding )
 
         elif front_padding_size != 0:
-            padding.set_size( front_padding_size )
+            set_size( padding.get_type(), front_padding_size )
 
             self.__insert( padding, member )
 
         elif right_padding_size != 0:
-            padding.set_size( right_padding_size )
+            set_size( padding.get_type(), right_padding_size )
             padding.set_this_offset( padding.get_this_offset() + member.get_size() )
 
             self.__insert( padding.prev, member )
@@ -1696,16 +1785,16 @@ class DIEReader:
         for cu in dwarf_info.iter_CUs():
             return cu[ 'address_size' ]
 
-    def _create_unknown_type( self, die ):
-        unknown_type = UnknownType()
-        self.types[ die.offset ] = unknown_type
-        return unknown_type
+    #def _create_unknown_type( self, die ):
+    #    unknown_type = UnknownType()
+    #    self.types[ die.offset ] = unknown_type
+    #    return unknown_type
 
-    def _get_or_create_unknown_type( self, die ):
-        if die.offset in self.types:
-            return self.types[ die.offset ]
-        else:
-            return self._create_unknown_type( die )
+    #def _get_or_create_unknown_type( self, die ):
+    #    if die.offset in self.types:
+    #        return self.types[ die.offset ]
+    #    else:
+    #        return self._create_unknown_type( die )
 
     def _create_type( self, die ):
         type = self._resolve_type( die )
@@ -1722,9 +1811,11 @@ class DIEReader:
         if die.offset in self.types:
             return self.types[ die.offset ]
         else:
-            type = self._resolve_type_impl( die )
-            self.types[ die.offset ] = type
-            return type
+            return self._resolve_type_impl( die )
+
+    def _store( self, offset, type ):
+        self.types[ offset ] = type
+        return type
 
     def _resolve_type_impl( self, die ):
 
@@ -1734,22 +1825,22 @@ class DIEReader:
         size = DIE.get_size( die )
 
         if die.tag == 'DW_TAG_base_type':
-            return BaseType( name, size )
+            return self._store( die.offset, BaseType( name, size ) )
         elif die.tag == 'DW_TAG_union_type':
-            return UnionType( name, size )
+            return self._store( die.offset, UnionType( name, size ) )
         elif die.tag == 'DW_TAG_class_type':
             return self._convert_die_to_struct( die )
         elif die.tag == 'DW_TAG_structure_type':
             return self._convert_die_to_struct( die )
         elif die.tag == 'DW_TAG_enumeration_type':
-            return EnumType( name, size )
+            return self._store( die.offset, EnumType( name, size ) )
 
         # process derived types
 
         type_id = DIE.get_type_id( die, self.dies )
 
         if type_id == None:
-            type = self._get_or_create_unknown_type( die )
+            type = UnknownType( 'type_id is None (1)' )
         else:
             type = self._get_or_create_type( self.dies[ type_id ] )
 
@@ -1760,23 +1851,23 @@ class DIEReader:
         elif die.tag == 'DW_TAG_typedef':
             return type
         elif die.tag == 'DW_TAG_pointer_type':
-            return PtrType( type, self.ptr_size )
+            return self._store( die.offset, PtrType( type, self.ptr_size ) )
         elif die.tag == 'DW_TAG_reference_type':
-            return RefType( type, self.ref_size )
+            return self._store( die.offset, RefType( type, self.ref_size ) )
         elif die.tag == 'DW_TAG_array_type':
             return ArrayType( type )
         elif die.tag == 'DW_TAG_const_type':
-            return ConstType( type, type.get_size() )
+            return self._store( die.offset, ConstType( type ) )
         elif die.tag == 'DW_TAG_volatile_type':
-            return VolatileType( type, type.get_size() )
+            return self._store( die.offset, VolatileType( type ) )
         else:
-            return UnknownType()
+            return UnknownType( 'Wrong die.tag %s' % die.tag )
 
     def _resolve_member_type( self, die ):
         type_id = DIE.get_type_id( die, self.dies )
 
         if type_id == None:
-            return self._get_or_create_unknown_type( die )
+            return UnknownType( 'type_id is None (2)' )
         else:
             return self._resolve_type( self.dies[ type_id ] )
 
@@ -1799,18 +1890,24 @@ class DIEReader:
 
         return Inheritance( type, this_offset )
 
+    def _create_struct_or_declaration( self, die ):
+        size = DIE.get_size( die )
+        name = DIE.get_name( die, self.dies )
+        is_declaration = DIE.is_declaration( die )
+
+        if is_declaration or size == None:
+            return DeclarationType( name )
+
+        struct = StructType( name, size )
+        return self._store( die.offset, struct )
+
     def _convert_die_to_struct( self, die ):
         assert DIE.is_struct( die ), 'die has to be a struct %s' % die.tag
 
         try:
             return self.types[ die.offset ]
         except KeyError:
-            struct = StructType( '__not_know_yet__', None )
-            self.types[ die.offset ] = struct
-
-        struct.set_name( DIE.get_name( die, self.dies ) )
-        struct.try_set_size( DIE.get_size( die ) )
-        struct.set_is_declaration( DIE.is_declaration( die ) )
+            struct = self._create_struct_or_declaration( die )
 
         for child in die.iter_children():
             if DIE.is_inheritance( child ):
