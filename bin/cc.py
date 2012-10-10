@@ -969,7 +969,7 @@ class PrintDiffOfStructAndPackedStruct( ITypeVisitor ):
         print( 'File', file_name, 'created.' )
 
         sys.stdout = file
-        print_diff_of_structs( struct, struct.get_packed() )
+        print_diff_of_structs( struct, struct.get_packed(), self.config.columns )
         file.close()
         sys.stdout = sys.__stdout__
 
