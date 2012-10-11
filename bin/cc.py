@@ -276,17 +276,9 @@ class IType( IVisitable ):
         precondition( soft_check_size( size ) )
 
         self.name = name
-
         self.size = size
 
         self.alignment = ConditionalStorage( greater_than, None )
-
-        self.is_declaration = False
-
-    def set_name( self, name ):
-        precondition( check_name( name ) )
-
-        self.name = name
 
     def get_name( self, width = None ):
         if width == None:
@@ -312,11 +304,6 @@ class IType( IVisitable ):
 
         return result
 
-    #def try_set_size( self, size ):
-    #    precondition( soft_check_size( size ) )
-    #
-    #    return self.size.set( size )
-
     def get_size( self ):
         return self.size
 
@@ -328,14 +315,9 @@ class IType( IVisitable ):
     def get_alignment( self ):
         return self.alignment.get()
 
+    # todo: remove
     def get_is_compactable( self ):
         return False
-
-    def set_is_declaration( self, is_declaration ):
-        self.is_declaration = is_declaration
-
-    def get_is_declaration( self ):
-        return self.is_declaration
 
     def get_is_completely_defined( self ):
         return False
@@ -361,6 +343,12 @@ class DeclarationType( IType ):
     def set_size( self, size ):
         self.size = size
 
+    def get_is_well_defined( self ):
+        return self.size > 0
+
+    def get_is_completely_defined( self ):
+        return False
+
     def _decorate_name( self, name ):
         return 'd{' + name + '}'
 
@@ -384,7 +372,10 @@ class UnknownType( IType ):
 
 class PtrType( IType ):
     def __init__( self, type, size ):
+        precondition( check_size( size ) )
+
         IType.__init__( self, 'Ptr', size )
+
         self.type = type
 
     def get_is_completely_defined( self ):
@@ -406,7 +397,10 @@ class PtrType( IType ):
 
 class RefType( IType ):
     def __init__( self, type, size ):
+        precondition( check_size( size ) )
+
         IType.__init__( self, 'Ref', size )
+
         self.type = type
 
     def get_is_completely_defined( self ):
@@ -429,6 +423,7 @@ class RefType( IType ):
 class ConstType( IType ):
     def __init__( self, type ):
         IType.__init__( self, 'Const', None )
+
         self.type = type
 
     def get_is_completely_defined( self ):
@@ -457,6 +452,7 @@ class ConstType( IType ):
 class VolatileType( IType ):
     def __init__( self, type ):
         IType.__init__( self, 'Volatile', None )
+
         self.type = type
 
     def get_size( self ):
@@ -484,6 +480,8 @@ class VolatileType( IType ):
 
 class BaseType( IType ):
     def __init__( self, name, size ):
+        precondition( check_size( size ) )
+
         IType.__init__( self, name, size )
 
     def get_is_completely_defined( self ):
@@ -494,6 +492,8 @@ class BaseType( IType ):
 
 class UnionType( IType ):
     def __init__( self, name, size ):
+        precondition( check_size( size ) )
+
         IType.__init__( self, name, size )
 
     def get_is_completely_defined( self ):
@@ -516,6 +516,7 @@ class ArrayType( IType ):
 
         self.type = type
 
+    # set total array size : number of items * sizeof( item )
     def set_size( self, size ):
         self.size = size
 
@@ -552,6 +553,8 @@ class ArrayType( IType ):
 
 class StructType( IType ):
     def __init__( self, name, size ):
+        precondition( check_size( size ) )
+
         IType.__init__( self, name, size )
 
         self.is_valid = True
@@ -623,9 +626,6 @@ class StructType( IType ):
         return True
 
     def get_is_completely_defined( self ):
-        if self.get_is_declaration():
-            return False
-
         for member in self.members:
             if member.get_type().get_is_completely_defined() == False:
                 return False
@@ -655,6 +655,8 @@ class StructType( IType ):
 
 class EnumType( IType ):
     def __init__( self, name, size ):
+        precondition( check_size( size ) )
+
         IType.__init__( self, name, size )
 
     def get_is_completely_defined( self ):
@@ -673,6 +675,8 @@ class EnumType( IType ):
 
 class PaddingType( IType ):
     def __init__( self, size ):
+        precondition( check_size( size ) )
+
         IType.__init__( self, 'Padding', size )
 
     def set_size( self, size ):
@@ -894,6 +898,9 @@ class ITypeVisitor:
 def type_error_exception( type, * args ):
     raise TypeError( str( type ) )
 
+#
+# SetTypeSizeVisitor
+#
 class SetTypeSizeVisitor( ITypeVisitor ):
     def __init__( self, size ):
         ITypeVisitor.__init__( self, type_error_exception )
@@ -1759,9 +1766,10 @@ class DIE:
 # DIEReader from DWARF/DIEs into abstract representation of types
 #
 class DIEReader:
-    def __init__( self ):
-        self.dies = {}
+    def __init__( self, config ):
+        self.config = config
 
+        self.dies = {}
         self.types = {}
 
         self.ptr_size = None
@@ -1785,17 +1793,6 @@ class DIEReader:
         for cu in dwarf_info.iter_CUs():
             return cu[ 'address_size' ]
 
-    #def _create_unknown_type( self, die ):
-    #    unknown_type = UnknownType()
-    #    self.types[ die.offset ] = unknown_type
-    #    return unknown_type
-
-    #def _get_or_create_unknown_type( self, die ):
-    #    if die.offset in self.types:
-    #        return self.types[ die.offset ]
-    #    else:
-    #        return self._create_unknown_type( die )
-
     def _create_type( self, die ):
         type = self._resolve_type( die )
         self.types[ die.offset ] = type
@@ -1813,7 +1810,7 @@ class DIEReader:
         else:
             return self._resolve_type_impl( die )
 
-    def _store( self, offset, type ):
+    def _cache( self, offset, type ):
         self.types[ offset ] = type
         return type
 
@@ -1824,50 +1821,53 @@ class DIEReader:
         name = DIE.get_name( die, self.dies )
         size = DIE.get_size( die )
 
+        if die.tag == 'DW_TAG_class_type' or die.tag == 'DW_TAG_structure_type':
+            return self._convert_die_to_struct( die )
+
+        # cache type
         if die.tag == 'DW_TAG_base_type':
-            return self._store( die.offset, BaseType( name, size ) )
+            return self._cache( die.offset, BaseType( name, size ) )
         elif die.tag == 'DW_TAG_union_type':
-            return self._store( die.offset, UnionType( name, size ) )
-        elif die.tag == 'DW_TAG_class_type':
-            return self._convert_die_to_struct( die )
-        elif die.tag == 'DW_TAG_structure_type':
-            return self._convert_die_to_struct( die )
+            return self._cache( die.offset, UnionType( name, size ) )
         elif die.tag == 'DW_TAG_enumeration_type':
-            return self._store( die.offset, EnumType( name, size ) )
+            return self._cache( die.offset, EnumType( name, size ) )
 
         # process derived types
 
         type_id = DIE.get_type_id( die, self.dies )
 
         if type_id == None:
-            type = UnknownType( 'type_id is None (1)' )
+            type = UnknownType( 'type_id is None' )
         else:
             type = self._get_or_create_type( self.dies[ type_id ] )
 
+        # do not cache type
         if die.tag == 'DW_TAG_member':
             return type
         elif die.tag == 'DW_TAG_inheritance':
             return type
         elif die.tag == 'DW_TAG_typedef':
             return type
-        elif die.tag == 'DW_TAG_pointer_type':
-            return self._store( die.offset, PtrType( type, self.ptr_size ) )
-        elif die.tag == 'DW_TAG_reference_type':
-            return self._store( die.offset, RefType( type, self.ref_size ) )
         elif die.tag == 'DW_TAG_array_type':
             return ArrayType( type )
+
+        # cache type
+        if die.tag == 'DW_TAG_pointer_type':
+            return self._cache( die.offset, PtrType( type, self.ptr_size ) )
+        elif die.tag == 'DW_TAG_reference_type':
+            return self._cache( die.offset, RefType( type, self.ref_size ) )
         elif die.tag == 'DW_TAG_const_type':
-            return self._store( die.offset, ConstType( type ) )
+            return self._cache( die.offset, ConstType( type ) )
         elif die.tag == 'DW_TAG_volatile_type':
-            return self._store( die.offset, VolatileType( type ) )
-        else:
-            return UnknownType( 'Wrong die.tag %s' % die.tag )
+            return self._cache( die.offset, VolatileType( type ) )
+
+        return UnknownType( 'Wrong die.tag %s' % die.tag )
 
     def _resolve_member_type( self, die ):
         type_id = DIE.get_type_id( die, self.dies )
 
         if type_id == None:
-            return UnknownType( 'type_id is None (2)' )
+            return UnknownType( 'type_id is None' )
         else:
             return self._resolve_type( self.dies[ type_id ] )
 
@@ -1899,7 +1899,7 @@ class DIEReader:
             return DeclarationType( name )
 
         struct = StructType( name, size )
-        return self._store( die.offset, struct )
+        return self._cache( die.offset, struct )
 
     def _convert_die_to_struct( self, die ):
         assert DIE.is_struct( die ), 'die has to be a struct %s' % die.tag
@@ -1952,7 +1952,7 @@ class Application:
         self.config = config
 
         self.dies = {}
-        self.die_reader = DIEReader()
+        self.die_reader = DIEReader( config )
 
     def process( self, file_name ):
         try:
@@ -2035,8 +2035,6 @@ class Application:
                 if self.config.warnings:
                     print( 'Warning: ', exception )
 
-                type.set_is_valid( False )
-
         return types
 
     def _detect_padding( self, types ):
@@ -2049,8 +2047,6 @@ class Application:
                 if self.config.warnings:
                     print( 'Warning: ', exception )
 
-                type.set_is_valid( False )
-
         return types
 
     def _fix_types( self, types ):
@@ -2062,8 +2058,6 @@ class Application:
             except EBOException as exception:
                 if self.config.warnings:
                     print( 'Warning: ', exception )
-
-                type.set_is_valid( False )
 
         return types
 
