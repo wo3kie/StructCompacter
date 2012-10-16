@@ -366,7 +366,7 @@ class PtrType( IType ):
         self.type = type
 
     def set_size( self, size ):
-        pass
+        raise TypeNotWellDefinedError( 'set_size is not allowed for PtrType' )
 
     def get_is_completely_defined( self ):
         return True
@@ -394,7 +394,7 @@ class RefType( IType ):
         self.type = type
 
     def set_size( self, size ):
-        pass
+        raise TypeNotWellDefinedError( 'set_size is not allowed for RefType' )
 
     def get_is_completely_defined( self ):
         return True
@@ -478,7 +478,7 @@ class BaseType( IType ):
         IType.__init__( self, name, size )
 
     def set_size( self, size ):
-        pass
+        raise TypeNotWellDefinedError( 'set_size is not allowed for BaseType' )
 
     def get_is_completely_defined( self ):
         return True
