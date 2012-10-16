@@ -32,11 +32,21 @@ def postcondition( condition ):
     assert condition, str( condition )
 
 def check_this_offset( this_offset, alignment ):
+    if alignment == None:
+        raise TypeNotWellDefinedError( 'Alignment can not be None for offset validation' )
+
+    if this_offset == None:
+        raise TypeNotWellDefinedError( 'Offset can not be None' )
+
     if this_offset < 0:
-        return False
+        raise TypeNotWellDefinedError( 'Offset can not be <0' )
+
+    if this_offset > 1024*1024:
+        raise TypeNotWellDefinedError( 'Offset can not be >1024*1024' )
 
     if this_offset % alignment != 0:
-        return False
+        raise TypeNotWellDefinedError( \
+            'Offset (%d) is not valid for alignment (%d)' % ( this_offset, alignment ) )
 
     return True
 
@@ -46,8 +56,25 @@ def soft_check_this_offset( this_offset, alignment ):
 
     return check_this_offset( this_offset, alignment )
 
-def check_name( name ):
-    return len( name ) > 0
+def check_type_name( name ):
+    if name == None:
+        raise TypeNotWellDefinedError( 'Type name can not be None' )
+
+    if len( name ) == 0:
+        raise TypeNotWellDefinedError( 'Type name can not be empty' )
+
+    if len( name ) > 8*1024:
+        raise TypeNotWellDefinedError( 'Type name is too long: (%s)' % name )
+
+    # internal g++ types name begin from digits and special symbols like '.', do not validate it
+
+    return True
+
+def soft_check_type_name( name ):
+    if name == None:
+        return True
+
+    return check_type_name( name )
 
 def check_type_size( size ):
     if size == None:
@@ -69,7 +96,7 @@ def soft_check_type_size( size ):
 
 def check_type_alignment( alignment, size ):
     if size == None:
-        raise TypeNotWellDefinedError( 'Size can not be None for Alignment validation' )
+        raise TypeNotWellDefinedError( 'Size can not be None for alignment validation' )
 
     if alignment == None:
         raise TypeNotWellDefinedError( 'Alignment can not be None' )
@@ -79,7 +106,7 @@ def check_type_alignment( alignment, size ):
 
     if ( size % alignment ) != 0:
         raise TypeNotWellDefinedError( \
-            'Size (%d) has to be mutliplication of Alignment (%d)' % ( size, alignment ) )
+            'Size (%d) has to be mutliplication of alignment (%d)' % ( size, alignment ) )
 
     return True
 
@@ -144,7 +171,7 @@ class IVisitable:
 #
 class IMember( IVisitable ):
     def __init__( self, name, type, this_offset ):
-        precondition( check_name( name ) )
+        precondition( check_type_name( name ) )
         precondition( type )
         precondition( soft_check_this_offset( this_offset, type.get_alignment() ) )
 
@@ -165,7 +192,7 @@ class IMember( IVisitable ):
         return self.this_offset
 
     def set_this_offset( self, this_offset ):
-        precondition( soft_check_this_offset( this_offset, self.get_type().get_alignment() ) )
+        precondition( check_this_offset( this_offset, self.get_type().get_alignment() ) )
 
         self.this_offset = this_offset
 
@@ -183,15 +210,9 @@ class IMember( IVisitable ):
     def _get_name( self ):
         return self.name
 
-    def __str__( self ):
-        return self.get_full_desc()
-
 class Inheritance( IMember ):
     def __init__( self, type, this_offset ):
         IMember.__init__( self, '__inheritance', type, this_offset )
-
-    def is_moveable( self ):
-        return False
 
     def get_brief_desc( self ):
         return self.get_name( 30 ) + ' ' \
@@ -204,12 +225,6 @@ class Member( IMember ):
 
         self.file_id = file_id
         self.line_no = line_no
-
-    def is_moveable( self ):
-        if is_vptr( self.name ):
-            return False
-
-        return True
 
     def get_brief_desc( self ):
         return \
@@ -227,9 +242,6 @@ class Member( IMember ):
 class Padding( IMember ):
     def __init__( self, type, this_offset ):
         IMember.__init__( self, '        ', type, this_offset )
-
-    def is_moveable( self ):
-        return True
 
     def get_brief_desc( self ):
         return self.get_name( 30 ) + ' ' \
@@ -265,7 +277,7 @@ class TypeNotWellDefinedError( StructCompacterError ):
 
 class IType( IVisitable ):
     def __init__( self, name, size ):
-        precondition( check_name( name ) )
+        precondition( check_type_name( name ) )
         precondition( soft_check_type_size( size ) )
 
         self.name = name
