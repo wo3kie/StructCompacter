@@ -49,32 +49,45 @@ def soft_check_this_offset( this_offset, alignment ):
 def check_name( name ):
     return len( name ) > 0
 
-def check_size( size ):
-    if size <= 0:
-        return False
+def check_type_size( size ):
+    if size == None:
+        raise TypeNotWellDefinedError( 'Size can not be None' )
+
+    if size < 1:
+        raise TypeNotWellDefinedError( 'Size can not be <1' )
+
+    if size > 1024*1024:
+        raise TypeNotWellDefinedError( 'Size can not be >1MB' )
 
     return True
 
-def soft_check_size( size ):
+def soft_check_type_size( size ):
     if size == None:
         return True
 
-    return check_size( size )
+    return check_type_size( size )
 
-def check_alignment( alignment, type_size ):
-    if alignment > type_size:
-        return False
+def check_type_alignment( alignment, size ):
+    if size == None:
+        raise TypeNotWellDefinedError( 'Size can not be None for Alignment validation' )
+
+    if alignment == None:
+        raise TypeNotWellDefinedError( 'Alignment can not be None' )
 
     if alignment not in [ 1, 2, 4, 8 ]:
-        return False
+        raise TypeNotWellDefinedError( 'Alignment (%d) is not one of [1,2,4,8]' % ( alignment ) )
+
+    if ( size % alignment ) != 0:
+        raise TypeNotWellDefinedError( \
+            'Size (%d) has to be mutliplication of Alignment (%d)' % ( size, alignment ) )
 
     return True
 
-def soft_check_alignment( alignment, type_size ):
-    if alignment == None or type_size == None:
+def soft_check_alignment( alignment, size ):
+    if alignment == None:
         return True
 
-    return check_alignment( alignment, type_size )
+    return check_type_alignment( alignment, size )
 
 #
 # Utils
@@ -88,7 +101,7 @@ def decode( values ):
     return result
 
 def abbrev( text, length ):
-    precondition( length >= 0 )
+    precondition( length > 3 )
 
     if len( text ) <= length:
         result = text
@@ -167,11 +180,6 @@ class IMember( IVisitable ):
 
     # details
 
-    def _set_type( self, type ):
-        precondition( type )
-
-        self.type = type
-
     def _get_name( self ):
         return self.name
 
@@ -244,10 +252,21 @@ def get_desc( type, width = None ):
 
     return result
 
+#
+# StructCompacterError
+#
+class StructCompacterError( Exception ):
+    def __init__( self, text ):
+        Exception.__init__( self, text )
+
+class TypeNotWellDefinedError( StructCompacterError ):
+    def __init__( self, text ):
+        StructCompacterError.__init__( self, text )
+
 class IType( IVisitable ):
     def __init__( self, name, size ):
         precondition( check_name( name ) )
-        precondition( soft_check_size( size ) )
+        precondition( soft_check_type_size( size ) )
 
         self.name = name
         self.size = size
@@ -266,13 +285,15 @@ class IType( IVisitable ):
         return result
 
     def set_size( self, size ):
+        precondition( check_type_size( size ) )
+
         self.size = size
 
     def get_size( self ):
         return self.size
 
     def set_alignment( self, alignment ):
-        precondition( soft_check_alignment( alignment, self.get_size() ) )
+        precondition( check_type_alignment( alignment, self.get_size() ) )
 
         self.alignment = alignment
 
@@ -280,10 +301,10 @@ class IType( IVisitable ):
         return self.alignment
 
     def get_is_completely_defined( self ):
-        return False
+        pass
 
     def get_is_well_defined( self ):
-        return False
+        pass
 
     # details
 
@@ -313,20 +334,20 @@ class DeclarationType( IType ):
         return 3
 
 class UnknownType( IType ):
-    def __init__( self, desc ):
+    def __init__( self, reason ):
         IType.__init__( self, 'unknown', None )
 
-        self.desc = desc
+        self.reason = reason
 
     def get_alignment( self ):
         return 1
 
-    def __str__( self ):
-        return 'Unknown: ' + self.desc
+    def get_reason( self ):
+        return self.reason
 
 class PtrType( IType ):
     def __init__( self, type, size ):
-        precondition( check_size( size ) )
+        precondition( check_type_size( size ) )
 
         IType.__init__( self, 'Ptr', size )
 
@@ -334,7 +355,6 @@ class PtrType( IType ):
 
     def set_size( self, size ):
         pass
-
 
     def get_is_completely_defined( self ):
         return True
@@ -355,7 +375,7 @@ class PtrType( IType ):
 
 class RefType( IType ):
     def __init__( self, type, size ):
-        precondition( check_size( size ) )
+        precondition( check_type_size( size ) )
 
         IType.__init__( self, 'Ref', size )
 
@@ -441,7 +461,7 @@ class VolatileType( IType ):
 
 class BaseType( IType ):
     def __init__( self, name, size ):
-        precondition( check_size( size ) )
+        precondition( check_type_size( size ) )
 
         IType.__init__( self, name, size )
 
@@ -456,7 +476,7 @@ class BaseType( IType ):
 
 class UnionType( IType ):
     def __init__( self, name, size ):
-        precondition( check_size( size ) )
+        precondition( check_type_size( size ) )
 
         IType.__init__( self, name, size )
 
@@ -513,7 +533,7 @@ class ArrayType( IType ):
 
 class StructType( IType ):
     def __init__( self, name, size ):
-        precondition( check_size( size ) )
+        precondition( check_type_size( size ) )
 
         IType.__init__( self, name, size )
 
@@ -606,7 +626,7 @@ class StructType( IType ):
 
 class EnumType( IType ):
     def __init__( self, name, size ):
-        precondition( check_size( size ) )
+        precondition( check_type_size( size ) )
 
         IType.__init__( self, name, size )
 
@@ -626,7 +646,7 @@ class EnumType( IType ):
 
 class PaddingType( IType ):
     def __init__( self, size ):
-        precondition( check_size( size ) )
+        precondition( check_type_size( size ) )
 
         IType.__init__( self, 'Padding', size )
 
@@ -653,7 +673,7 @@ class Alignment:
         return gcd( 8, size )
 
     @staticmethod
-    def get_from_position( this_offset, type_size ):
+    def get_from_position_and_type_size( this_offset, type_size ):
         precondition( this_offset >= 0 )
         precondition( type_size > 0 )
 
@@ -661,8 +681,15 @@ class Alignment:
             if i > type_size:
                 continue
 
-            if this_offset % i == 0:
-                return i
+            if this_offset % i != 0:
+                continue
+
+            if type_size % i != 0:
+                continue
+
+            return i
+
+        return 1
 
     @staticmethod
     def is_aligned( this_offset, alignment ):
@@ -720,7 +747,7 @@ def fix_size_and_alignment( struct ):
             current.get_type().set_size( member_size )
 
         alignment \
-            = Alignment.get_from_position( current.get_this_offset(), current.get_type().get_size() )
+            = Alignment.get_from_position_and_type_size( current.get_this_offset(), current.get_type().get_size() )
 
         try_set_alignment( current.get_type(), alignment )
 
@@ -736,7 +763,7 @@ def fix_size_and_alignment( struct ):
         current.get_type().set_size( member_size )
 
     alignment \
-        = Alignment.get_from_position( current.get_this_offset(), current.get_type().get_size() )
+        = Alignment.get_from_position_and_type_size( current.get_this_offset(), current.get_type().get_size() )
 
     try_set_alignment( current.get_type(), alignment )
 
@@ -1072,9 +1099,9 @@ class PaddingNode( INode ):
         INode.__init__( self, '__padding', type, this_offset )
 
     def set_size( self, size ):
-        precondition( check_size( size ) )
+        precondition( check_type_size( size ) )
 
-        self._set_type( PaddingType( size ) )
+        self.get_type().set_size( size )
 
     def __str__( self ):
         return '__padding [' + str( self.get_size() ) + ']'\
@@ -1137,8 +1164,8 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
 # FindMatchingPaddingVisitor
 #
 def check_padding( padding, size, alignment ):
-    precondition( check_size( size ) )
-    precondition( check_alignment( alignment, size ) )
+    precondition( check_type_size( size ) )
+    precondition( check_type_alignment( alignment, size ) )
 
     if padding.get_size() < size:
         return False
@@ -1260,8 +1287,8 @@ class StructCompacter:
         self.struct = None
 
     def process( self, struct ):
-        if struct.get_is_well_defined() == False:
-            return None
+        #if struct.get_is_well_defined() == False:
+        #    return None
 
         if calculate_total_padding( struct ) < struct.get_alignment():
             return None
