@@ -576,10 +576,32 @@ class StructType( IType ):
         return result
 
     def add_member( self, member ):
-        if member == None:
-            return
+        precondition( self._validate_member( member ) )
 
         self.members.append( member )
+
+    def _validate_member( self, member ):
+        if member == None:
+            raise( TypeNotWellDefinedError( \
+                'Member %s in struct %s can not be empty' ) \
+                    % ( member.get_name(), self.get_name() ) )
+
+        member_begin = member.get_this_offset()
+
+        if len( self.members ) == 0:
+            if member_begin == 0:
+                return True
+            else:
+                raise TypeNotWellDefinedError( \
+                    'Member %s in struct %s has to be at this+0 (%d)' \
+                        % ( member.get_name(), self.get_name(), member_begin ) )
+
+        if member_begin >= self.get_size():
+            raise TypeNotWellDefinedError( \
+                'Member %s in struct %s is outside struct this+%d / %d' \
+                    % ( member.get_name(), self.get_name(), member_begin, self.get_size() ) )
+
+        return True
 
     def get_members( self ):
         return self.members
@@ -1310,9 +1332,9 @@ class StructCompacter:
 
             return result
 
-        except EBOError as exception:
+        except EBOError as error:
             if self.config.warnings:
-                print( 'Warning:', exception )
+                print( 'Warning:', error )
 
             return None
 
@@ -1886,13 +1908,17 @@ class DIEReader:
         except KeyError:
             struct = self._create_struct_or_declaration( die )
 
-        for child in die.iter_children():
-            if DIE.is_inheritance( child ):
-                struct.add_member( self._convert_die_to_inheritance( child ) )
-            elif DIE.is_member( child ):
-                struct.add_member( self._convert_die_to_member( child ) )
-            elif DIE.is_struct( child ):
-                self._convert_die_to_struct( child )
+        try:
+            for child in die.iter_children():
+                if DIE.is_inheritance( child ):
+                    struct.add_member( self._convert_die_to_inheritance( child ) )
+                elif DIE.is_member( child ):
+                    struct.add_member( self._convert_die_to_member( child ) )
+                elif DIE.is_struct( child ):
+                    self._convert_die_to_struct( child )
+        except StructCompacterError as error:
+            if self.config.warnings:
+                print( 'Warning: ', error )
 
         return struct
 
@@ -1994,9 +2020,9 @@ class Application:
 
             try:
                 type.accept( visitor, None )
-            except EBOError as exception:
+            except EBOError as error:
                 if self.config.warnings:
-                    print( 'Warning: ', exception )
+                    print( 'Warning: ', error )
 
         return types
 
@@ -2006,9 +2032,9 @@ class Application:
         for id, type in types.items():
             try:
                 type.accept( visitor, None )
-            except EBOError as exception:
+            except EBOError as error:
                 if self.config.warnings:
-                    print( 'Warning: ', exception )
+                    print( 'Warning: ', error )
 
         return types
 
@@ -2018,9 +2044,9 @@ class Application:
         for id, type in types.items():
             try:
                 type.accept( visitor, None )
-            except EBOError as exception:
+            except EBOError as error:
                 if self.config.warnings:
-                    print( 'Warning: ', exception )
+                    print( 'Warning: ', error )
 
         return types
 
