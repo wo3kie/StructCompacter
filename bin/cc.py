@@ -56,26 +56,6 @@ def soft_check_this_offset( this_offset, alignment ):
 
     return check_this_offset( this_offset, alignment )
 
-def check_type_name( name ):
-    if name == None:
-        raise TypeNotWellDefinedError( 'Type name can not be None' )
-
-    if len( name ) == 0:
-        raise TypeNotWellDefinedError( 'Type name can not be empty' )
-
-    if len( name ) > 8*1024:
-        raise TypeNotWellDefinedError( 'Type name is too long: (%s)' % name )
-
-    # internal g++ types name begin from digits and special symbols like '.', do not validate it
-
-    return True
-
-def soft_check_type_name( name ):
-    if name == None:
-        return True
-
-    return check_type_name( name )
-
 def check_type_size( size ):
     if size == None:
         raise TypeNotWellDefinedError( 'Size can not be None' )
@@ -93,28 +73,6 @@ def soft_check_type_size( size ):
         return True
 
     return check_type_size( size )
-
-def check_type_alignment( alignment, size ):
-    if size == None:
-        raise TypeNotWellDefinedError( 'Size can not be None for alignment validation' )
-
-    if alignment == None:
-        raise TypeNotWellDefinedError( 'Alignment can not be None' )
-
-    if alignment not in [ 1, 2, 4, 8 ]:
-        raise TypeNotWellDefinedError( 'Alignment (%d) is not one of [1,2,4,8]' % ( alignment ) )
-
-    if ( size % alignment ) != 0:
-        raise TypeNotWellDefinedError( \
-            'Size (%d) has to be mutliplication of alignment (%d)' % ( size, alignment ) )
-
-    return True
-
-def soft_check_alignment( alignment, size ):
-    if alignment == None:
-        return True
-
-    return check_type_alignment( alignment, size )
 
 #
 # Utils
@@ -141,23 +99,42 @@ def abbrev( text, length ):
 
     return result
 
-def is_template_name( text ):
-    precondition( len( text ) > 0 )
+class TypeName:
+    @staticmethod
+    def is_template( text ):
+        precondition( len( text ) > 0 )
 
-    return text.find( '<' ) != -1
+        return text.find( '<' ) != -1
 
-def is_stl_internal_name( text ):
-    precondition( len( text ) > 0 )
+    @staticmethod
+    def is_stl_internal( text ):
+        precondition( len( text ) > 0 )
 
-    if text.startswith( '_' ):
+        if text.startswith( '_' ):
+            return True
+
+        return False
+
+    @staticmethod
+    def is_vptr( text ):
+        precondition( len( text ) > 0 )
+
+        return text.startswith( '_vptr.' )
+
+    @staticmethod
+    def validate( name ):
+        if name == None:
+            raise TypeNotWellDefinedError( 'Type name can not be None' )
+
+        if len( name ) == 0:
+            raise TypeNotWellDefinedError( 'Type name can not be empty' )
+
+        if len( name ) > 8*1024:
+            raise TypeNotWellDefinedError( 'Type name is too long: (%s)' % name )
+
+        # internal g++ types name begin from digits and special symbols like '.', do not validate it
+
         return True
-
-    return False
-
-def is_vptr( text ):
-    precondition( len( text ) > 0 )
-
-    return text.startswith( '_vptr.' )
 
 #
 # IVisitable
@@ -171,7 +148,7 @@ class IVisitable:
 #
 class IMember( IVisitable ):
     def __init__( self, name, type, this_offset ):
-        precondition( check_type_name( name ) )
+        precondition( TypeName.validate( name ) )
         precondition( type )
         precondition( soft_check_this_offset( this_offset, type.get_alignment() ) )
 
@@ -275,9 +252,14 @@ class TypeNotWellDefinedError( StructCompacterError ):
     def __init__( self, text ):
         StructCompacterError.__init__( self, text )
 
+class EBOError( StructCompacterError ):
+    def __init__( self, text ):
+        StructCompacterError.__init__( self, text )
+
+
 class IType( IVisitable ):
     def __init__( self, name, size ):
-        precondition( check_type_name( name ) )
+        precondition( TypeName.validate( name ) )
         precondition( soft_check_type_size( size ) )
 
         self.name = name
@@ -305,7 +287,7 @@ class IType( IVisitable ):
         return self.size
 
     def set_alignment( self, alignment ):
-        precondition( check_type_alignment( alignment, self.get_size() ) )
+        precondition( Alignment.validate( alignment, self.get_size() ) )
 
         self.alignment = alignment
 
@@ -724,9 +706,22 @@ class Alignment:
 
         return ceil( value / alignment ) * alignment
 
-class EBOException( Exception ):
-    def __init__( self, text ):
-        Exception.__init__( self, text )
+    @staticmethod
+    def validate( alignment, size ):
+        if size == None:
+            raise TypeNotWellDefinedError( 'Size can not be None for alignment validation' )
+
+        if alignment == None:
+            raise TypeNotWellDefinedError( 'Alignment can not be None' )
+
+        if alignment not in [ 1, 2, 4, 8 ]:
+            raise TypeNotWellDefinedError( 'Alignment (%d) is not one of [1,2,4,8]' % ( alignment ) )
+
+        if ( size % alignment ) != 0:
+            raise TypeNotWellDefinedError( \
+                'Size (%d) has to be mutliplication of alignment (%d)' % ( size, alignment ) )
+
+        return True
 
 #
 # fix_size_and_alignment
@@ -748,36 +743,29 @@ def fix_size_and_alignment( struct ):
 
     # resolve all but last
     for i in range( 0, len( members ) -1 ):
-        current = members[ i ]
-        next = members[ i + 1 ]
-        member_size = next.get_this_offset() - current.get_this_offset()
+        member_size = members[ i + 1 ].get_this_offset() - members[ i ].get_this_offset()
 
         if member_size <= 0:
-            raise EBOException( 'EBO for type %s' % struct.get_name() )
+            raise EBOError( 'EBO for type %s' % struct.get_name() )
 
-        if current.get_type().get_size() == None:
-            current.get_type().set_size( member_size )
-
-        alignment \
-            = Alignment.get_from_position_and_type_size( current.get_this_offset(), current.get_type().get_size() )
-
-        try_set_alignment( current.get_type(), alignment )
+        fix_size_and_alignment_aux( members[ i ], member_size )
 
     # resolve last
-    current = members[ -1 ]
-
-    member_size = struct.get_size() - current.get_this_offset()
+    member_size = struct.get_size() - members[ -1 ].get_this_offset()
 
     if member_size <= 0:
-        raise EBOException( 'EBO for type %s' % struct.get_name() )
+        raise EBOError( 'EBO for type %s' % struct.get_name() )
 
-    if current.get_type().get_size() == None:
-        current.get_type().set_size( member_size )
+    fix_size_and_alignment_aux( members[ -1 ], member_size )
+
+def fix_size_and_alignment_aux( member, size ):
+    if member.get_type().get_size() == None:
+        member.get_type().set_size( size )
 
     alignment \
-        = Alignment.get_from_position_and_type_size( current.get_this_offset(), current.get_type().get_size() )
+        = Alignment.get_from_position_and_type_size( member.get_this_offset(), member.get_type().get_size() )
 
-    try_set_alignment( current.get_type(), alignment )
+    try_set_alignment( member.get_type(), alignment )
 
 #
 # find_and_create_padding_members
@@ -799,7 +787,7 @@ def find_and_create_padding_members( struct ):
         padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
 
         if padding_size < 0:
-            raise EBOException( 'EBO for type %s' % struct.get_name() )
+            raise EBOError( 'EBO for type %s' % struct.get_name() )
 
         members_and_paddings.append( current )
 
@@ -810,7 +798,7 @@ def find_and_create_padding_members( struct ):
     padding_size = struct.get_size() - current.get_this_offset() - current.get_size()
 
     if padding_size < 0:
-        raise EBOException( 'EBO for type %s' % struct.get_name() )
+        raise EBOError( 'EBO for type %s' % struct.get_name() )
 
     members_and_paddings.append( current )
 
@@ -1005,10 +993,10 @@ class PrintStructVisitor( ITypeVisitor ):
             if struct._get_name() not in self.config.types:
                 return
 
-        if is_template_name( struct._get_name() ):
+        if TypeName.is_template( struct._get_name() ):
             return
 
-        if is_stl_internal_name( struct._get_name() ):
+        if TypeName.is_stl_internal( struct._get_name() ):
             return
 
         id = args[0]
@@ -1177,7 +1165,7 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
 #
 def check_padding( padding, size, alignment ):
     precondition( check_type_size( size ) )
-    precondition( check_type_alignment( alignment, size ) )
+    precondition( Alignment.validate( alignment, size ) )
 
     if padding.get_size() < size:
         return False
@@ -1322,7 +1310,7 @@ class StructCompacter:
 
             return result
 
-        except EBOException as exception:
+        except EBOError as exception:
             if self.config.warnings:
                 print( 'Warning:', exception )
 
@@ -1618,10 +1606,10 @@ class CompactStructVisitor( ITypeVisitor ):
     # details
 
     def _skip_type( self, struct ):
-        if is_template_name( struct.get_name() ):
+        if TypeName.is_template( struct.get_name() ):
             return True
 
-        if is_stl_internal_name( struct.get_name() ):
+        if TypeName.is_stl_internal( struct.get_name() ):
             return True
 
         return False
@@ -1710,11 +1698,11 @@ class DIE:
 
     @staticmethod
     def is_template( die, dies ):
-        return is_template_name( DIE.get_name( die, dies ) )
+        return TypeName.is_template( DIE.get_name( die, dies ) )
 
     @staticmethod
     def is_stl( die, dies ):
-        return is_stl_internal_name( DIE.get_name( die, dies ) )
+        return TypeName.is_stl_internal( DIE.get_name( die, dies ) )
 
     @staticmethod
     def is_local_class( die ):
@@ -1964,7 +1952,7 @@ class Application:
             self._print_compacted_types( types )
             print( 'Done.' )
 
-        except EBOException as e:
+        except EBOError as e:
             print( 'File', file_name, 'skipped since', e )
 
     # details
@@ -2006,7 +1994,7 @@ class Application:
 
             try:
                 type.accept( visitor, None )
-            except EBOException as exception:
+            except EBOError as exception:
                 if self.config.warnings:
                     print( 'Warning: ', exception )
 
@@ -2018,7 +2006,7 @@ class Application:
         for id, type in types.items():
             try:
                 type.accept( visitor, None )
-            except EBOException as exception:
+            except EBOError as exception:
                 if self.config.warnings:
                     print( 'Warning: ', exception )
 
@@ -2030,7 +2018,7 @@ class Application:
         for id, type in types.items():
             try:
                 type.accept( visitor, None )
-            except EBOException as exception:
+            except EBOError as exception:
                 if self.config.warnings:
                     print( 'Warning: ', exception )
 
