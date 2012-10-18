@@ -535,14 +535,6 @@ class StructType( IType ):
 
         self.members = []
 
-        self.compacted = None
-
-    def set_packed( self, compacted ):
-        self.compacted = compacted
-
-    def get_packed( self ):
-        return self.compacted
-
     def get_full_desc( self ):
         total_padding = calculate_total_padding( self )
         alignment = self.get_alignment()
@@ -833,7 +825,7 @@ def find_and_create_padding_members( struct ):
 # ITypeVisitor for IType hierarchy
 #
 
-def default_type_handler( type, * args ):
+def default_type_handler( visitor, type, * args ):
     return None
 
 class ITypeVisitor:
@@ -859,51 +851,48 @@ class ITypeVisitor:
         self.dispatcher[ interface.__class__ ]( interface, * args )
 
     def visit_unknown_type( self, unknown, * args ):
-        return self.default_handler( unknown, * args )
+        return self.default_handler( self, unknown, * args )
 
     def visit_declaration_type( self, declaration, * args ):
-        return self.default_handler( declaration, * args )
+        return self.default_handler( self, declaration, * args )
 
     def visit_ptr_type( self, ptr, * args ):
-        return self.default_handler( ptr, * args )
+        return self.default_handler( self, ptr, * args )
 
     def visit_ref_type( self, ref, * args ):
-        return self.default_handler( ref, * args )
+        return self.default_handler( self, ref, * args )
 
     def visit_const_type( self, const, * args ):
-        return self.default_handler( const, * args )
+        return self.default_handler( self, const, * args )
 
     def visit_volatile_type( self, volatile, * args ):
-        return self.default_handler( volatile, * args )
+        return self.default_handler( self, volatile, * args )
 
     def visit_base_type( self, base, * args ):
-        return self.default_handler( base, * args )
+        return self.default_handler( self, base, * args )
 
     def visit_union_type( self, union, * args ):
-        return self.default_handler( union, * args )
+        return self.default_handler( self, union, * args )
 
     def visit_declaration_type( self, declaration, * args ):
-        return self.default_handler( declaration, * args )
+        return self.default_handler( self, declaration, * args )
 
     def visit_array_type( self, array, * args ):
-        return self.default_handler( array, * args )
+        return self.default_handler( self, array, * args )
 
     def visit_struct_type( self, struct, * args ):
-        return self.default_handler( struct, * args )
+        return self.default_handler( self, struct, * args )
 
     def visit_enum_type( self, enum, * args ):
-        return self.default_handler( enum, * args )
+        return self.default_handler( self, enum, * args )
 
     def visit_padding_type( self, padding, * args ):
-        return self.default_handler( padding, * args )
-
-def type_error_exception( type, * args ):
-    raise TypeError( str( type ) )
+        return self.default_handler( self, padding, * args )
 
 #
 # IMemberVisitor
 #
-def default_member_handler( member, * args ):
+def default_member_handler( visitor, member, * args ):
     return None
 
 class IMemberVisitor:
@@ -920,13 +909,13 @@ class IMemberVisitor:
         self.dispatcher[ interface.__class__ ]( interface, * args )
 
     def visit_member( self, member, * args ):
-        return self.default_handler( member, * args )
+        return self.default_handler( self, member, * args )
 
     def visit_inheritance( self, inheritance, * args ):
-        return self.default_handler( inheritance, * args )
+        return self.default_handler( self, inheritance, * args )
 
     def visit_padding( self, padding, * args ):
-        return self.default_handler( padding, * args )
+        return self.default_handler( self, padding, * args )
 
 #
 # CalculateTotalPaddingVisitor
@@ -952,7 +941,6 @@ def calculate_total_padding( struct ):
         member.accept( total_padding_visitor )
 
     return total_padding_visitor.get()
-
 
 def print_diff_of_structs( struct1, struct2, width ):
     def _format( member, width ):
@@ -1023,43 +1011,7 @@ class PrintStructVisitor( ITypeVisitor ):
 
         id = args[0]
 
-        if struct.get_packed():
-            print( '%x %s' % ( id, struct.get_packed().get_full_desc() ) )
-        else:
-            print( '%x %s' % ( id, struct.get_full_desc() ) )
-
-#
-# PrintDiffOfStructAndPackedStructVisitor
-#
-class PrintDiffOfStructAndPackedStructVisitor( ITypeVisitor ):
-    def __init__( self, config ):
-        ITypeVisitor.__init__( self )
-
-        self.config = config
-
-    def visit_struct_type( self, struct, * args ):
-        if not struct.get_packed():
-            return
-
-        if self.config.output == 'stdout':
-            self._print_to_stdout( struct )
-        else:
-            self._print_to_file( struct )
-
-    def _print_to_stdout( self, struct ):
-        print_diff_of_structs( struct, struct.get_packed(), self.config.columns )
-        print( '\n' )
-
-    def _print_to_file( self, struct ):
-        file_name = struct.get_name() + '.cc'
-        file = open( file_name, 'w' )
-
-        print( 'File', file_name, 'created.' )
-
-        sys.stdout = file
-        print_diff_of_structs( struct, struct.get_packed(), self.config.columns )
-        file.close()
-        sys.stdout = sys.__stdout__
+        print( '%x %s' % ( id, struct.get_full_desc() ) )
 
 #
 # INode
@@ -1132,7 +1084,7 @@ class PaddingNode( INode ):
 #
 # INodeVisitor
 #
-def default_node_handler( node, * args ):
+def default_node_handler( self, node, * args ):
     return None
 
 class INodeVisitor:
@@ -1150,16 +1102,16 @@ class INodeVisitor:
         self.dispatcher[ node.__class__ ]( node, * args )
 
     def visit_head_node( self, head, * args ):
-        return self.default_handler( head, * args )
+        return self.default_handler( self, head, * args )
 
     def visit_member_node( self, member, * args ):
-        return self.default_handler( member, * args )
+        return self.default_handler( self, member, * args )
 
     def visit_inheritance_node( self, inheritance, * args ):
-        return self.default_handler( inheritance, * args )
+        return self.default_handler( self, inheritance, * args )
 
     def visit_padding_node( self, padding, * args ):
-        return self.default_handler( padding, * args )
+        return self.default_handler( self, padding, * args )
 
 #
 # TypesToNodesConversionVisitor
@@ -1617,13 +1569,22 @@ class CompactStructVisitor( ITypeVisitor ):
     def __init__( self ):
         ITypeVisitor.__init__( self )
 
+        self.packed = None
+
     def visit_struct_type( self, struct, * args ):
         if self._skip_type( struct ):
-            return
+            self.packed = None
+        else:
+            self.packed = StructCompacter().process( struct )
 
-        struct_compacter = StructCompacter()
-        compacted = struct_compacter.process( struct )
-        struct.set_packed( compacted )
+    def get_and_clear( self ):
+        result = self.packed
+        self.packed = None
+
+        return result
+
+    def clear( self ):
+        self.packed = None
 
     # details
 
@@ -1969,13 +1930,13 @@ class Application:
             types = self._detect_padding( types )
 
             if self.config.debug:
-                self._print_types( types )
+                self._print_structs( types )
 
             print( 'Compacting classes...' )
-            types = self._compact_types( types )
+            packed_types = self._compact_types( types )
 
             print( '... and finally:' )
-            self._print_compacted_types( types )
+            self._print_diff_of_structs( packed_types )
             print( 'Done.' )
 
         except EBOError as e:
@@ -1998,13 +1959,26 @@ class Application:
     def _get_types( self ):
         return self.die_reader.get_types()
 
-    def _print_compacted_types( self, types ):
-        print_output_visitor = PrintDiffOfStructAndPackedStructVisitor( self.config )
+    def _print_diff_of_structs( self, struct_packed ):
+        for ( struct, packed ) in struct_packed:
+            if packed == None:
+                continue
 
-        for id, type in types.items():
-            type.accept( print_output_visitor, None )
+            if self.config.output == 'stdout':
+                print_diff_of_structs( struct, packed, self.config.columns )
+                print( '\n' )
+            else:
+                file_name = struct.get_name() + '.cc'
+                file = open( file_name, 'w' )
 
-    def _print_types( self, types ):
+                print( 'File', file_name, 'created.' )
+
+                sys.stdout = file
+                print_diff_of_structs( struct, packed, self.config.columns )
+                file.close()
+                sys.stdout = sys.__stdout__
+
+    def _print_structs( self, types ):
         print_output_visitor = PrintStructVisitor( self.config )
 
         for id, type in types.items():
@@ -2013,6 +1987,8 @@ class Application:
     def _compact_types( self, types ):
         visitor = CompactStructVisitor()
 
+        packed_types = []
+
         for id, type in types.items():
             if len( self.config.types ) > 0:
                 if type.get_name() not in self.config.types:
@@ -2020,11 +1996,17 @@ class Application:
 
             try:
                 type.accept( visitor, None )
+
+                packed = visitor.get_and_clear()
+
+                if packed:
+                    packed_types.append( ( type, packed ) )
+
             except EBOError as error:
                 if self.config.warnings:
                     print( 'Warning: ', error )
 
-        return types
+        return packed_types
 
     def _detect_padding( self, types ):
         visitor = DetectPaddingVisitor()
