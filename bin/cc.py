@@ -31,48 +31,17 @@ def check( condition ):
 def postcondition( condition ):
     assert condition, str( condition )
 
-def check_this_offset( this_offset, alignment ):
-    if alignment == None:
-        raise TypeNotWellDefinedError( 'Alignment can not be None for offset validation' )
-
-    if this_offset == None:
-        raise TypeNotWellDefinedError( 'Offset can not be None' )
-
-    if this_offset < 0:
-        raise TypeNotWellDefinedError( 'Offset can not be <0' )
-
-    if this_offset > 1024*1024:
-        raise TypeNotWellDefinedError( 'Offset can not be >1024*1024' )
-
-    if this_offset % alignment != 0:
-        raise TypeNotWellDefinedError( \
-            'Offset (%d) is not valid for alignment (%d)' % ( this_offset, alignment ) )
-
-    return True
-
 def soft_check_this_offset( this_offset, alignment ):
     if this_offset == None or alignment == None:
         return True
 
-    return check_this_offset( this_offset, alignment )
-
-def check_type_size( size ):
-    if size == None:
-        raise TypeNotWellDefinedError( 'Size can not be None' )
-
-    if size < 1:
-        raise TypeNotWellDefinedError( 'Size can not be <1' )
-
-    if size > 1024*1024:
-        raise TypeNotWellDefinedError( 'Size can not be >1MB' )
-
-    return True
+    return ThisOffset.validate( this_offset, alignment )
 
 def soft_check_type_size( size ):
     if size == None:
         return True
 
-    return check_type_size( size )
+    return TypeSize.validate( size )
 
 #
 # Utils
@@ -98,6 +67,41 @@ def abbrev( text, length ):
     postcondition( len( result ) <= length )
 
     return result
+
+class ThisOffset:
+    @staticmethod
+    def validate( this_offset, alignment ):
+        if alignment == None:
+            raise TypeNotWellDefinedError( 'Alignment can not be None for offset validation' )
+
+        if this_offset == None:
+            raise TypeNotWellDefinedError( 'Offset can not be None' )
+
+        if this_offset < 0:
+            raise TypeNotWellDefinedError( 'Offset can not be <0' )
+
+        if this_offset > 1024*1024:
+            raise TypeNotWellDefinedError( 'Offset can not be >1024*1024' )
+
+        if this_offset % alignment != 0:
+            raise TypeNotWellDefinedError( \
+                'Offset (%d) is not valid for alignment (%d)' % ( this_offset, alignment ) )
+
+        return True
+
+class TypeSize:
+    @staticmethod
+    def validate( size ):
+        if size == None:
+            raise TypeNotWellDefinedError( 'Size can not be None' )
+
+        if size < 1:
+            raise TypeNotWellDefinedError( 'Size can not be <1' )
+
+        if size > 1024*1024:
+            raise TypeNotWellDefinedError( 'Size can not be >1MB' )
+
+        return True
 
 class TypeName:
     @staticmethod
@@ -169,7 +173,7 @@ class IMember( IVisitable ):
         return self.this_offset
 
     def set_this_offset( self, this_offset ):
-        precondition( check_this_offset( this_offset, self.get_type().get_alignment() ) )
+        precondition( ThisOffset.validate( this_offset, self.get_type().get_alignment() ) )
 
         self.this_offset = this_offset
 
@@ -279,7 +283,7 @@ class IType( IVisitable ):
         return result
 
     def set_size( self, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         self.size = size
 
@@ -341,7 +345,7 @@ class UnknownType( IType ):
 
 class PtrType( IType ):
     def __init__( self, type, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, 'Ptr', size )
 
@@ -369,7 +373,7 @@ class PtrType( IType ):
 
 class RefType( IType ):
     def __init__( self, type, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, 'Ref', size )
 
@@ -455,7 +459,7 @@ class VolatileType( IType ):
 
 class BaseType( IType ):
     def __init__( self, name, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, name, size )
 
@@ -470,7 +474,7 @@ class BaseType( IType ):
 
 class UnionType( IType ):
     def __init__( self, name, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, name, size )
 
@@ -527,7 +531,7 @@ class ArrayType( IType ):
 
 class StructType( IType ):
     def __init__( self, name, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, name, size )
 
@@ -573,24 +577,41 @@ class StructType( IType ):
         self.members.append( member )
 
     def _validate_member( self, member ):
+        # member == None
         if member == None:
             raise( TypeNotWellDefinedError( \
-                'Member %s in struct %s can not be empty' ) \
+                'Member %s in struct %s can not be None' ) \
                     % ( member.get_name(), self.get_name() ) )
 
         member_begin = member.get_this_offset()
 
+        # first member not at this+0
         if len( self.members ) == 0:
             if member_begin == 0:
                 return True
             else:
                 raise TypeNotWellDefinedError( \
-                    'Member %s in struct %s has to be at this+0 (%d)' \
+                    'Member %s in struct %s has to be at (this+0/%d)' \
                         % ( member.get_name(), self.get_name(), member_begin ) )
 
+        # member overlaps previous member
+        last_member_begin = self.members[ -1 ].get_this_offset()
+
+        last_member_size = self.members[ -1 ].get_type().get_size()
+        if last_member_size == None:
+            last_member_size = 0
+
+        last_member_end = last_member_begin + last_member_size
+
+        if member_begin < last_member_end:
+            raise TypeNotWellDefinedError( \
+                'Member %s in struct %s lays before previous member end (this+%d/this+%d)' \
+                    % ( member.get_name(), self.get_name(), member_begin, last_member_end ) )
+
+        # member out of a struct
         if member_begin >= self.get_size():
             raise TypeNotWellDefinedError( \
-                'Member %s in struct %s is outside struct this+%d / %d' \
+                'Member %s in struct %s is outside struct (this+%d/%d)' \
                     % ( member.get_name(), self.get_name(), member_begin, self.get_size() ) )
 
         return True
@@ -634,7 +655,7 @@ class StructType( IType ):
 
 class EnumType( IType ):
     def __init__( self, name, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, name, size )
 
@@ -654,7 +675,7 @@ class EnumType( IType ):
 
 class PaddingType( IType ):
     def __init__( self, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, 'Padding', size )
 
@@ -1073,7 +1094,7 @@ class PaddingNode( INode ):
         INode.__init__( self, '__padding', type, this_offset )
 
     def set_size( self, size ):
-        precondition( check_type_size( size ) )
+        precondition( TypeSize.validate( size ) )
 
         self.get_type().set_size( size )
 
@@ -1138,7 +1159,7 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
 # FindMatchingPaddingVisitor
 #
 def check_padding( padding, size, alignment ):
-    precondition( check_type_size( size ) )
+    precondition( TypeSize.validate( size ) )
     precondition( Alignment.validate( alignment, size ) )
 
     if padding.get_size() < size:
