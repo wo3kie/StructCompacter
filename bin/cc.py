@@ -7,12 +7,14 @@ import sys
 from math import ceil
 from fractions import gcd
 
-if sys.platform.startswith( 'win' ):
-    sys.path.append( '..\\3rdParty\\pyelftools-0.20' )
-elif sys.platform.startswith( 'linux' ):
-    sys.path.append( '../3rdParty/pyelftools-0.20' )
-else:
-    exit( 'Apple?' )
+# pyelftools should be installed in Python directory
+
+#if sys.platform.startswith( 'win' ):
+#    sys.path.append( '..\\3rdParty\\pyelftools-0.20' )
+#elif sys.platform.startswith( 'linux' ):
+#    sys.path.append( '../3rdParty/pyelftools-0.20' )
+#else:
+#    exit( 'Apple?' )
 
 from elftools.elf.elffile import ELFFile
 from elftools.common.exceptions import ELFError
