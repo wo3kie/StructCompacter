@@ -1,4 +1,4 @@
-# Class Compacter
+# Struct Compacter
 
 import argparse
 import os
@@ -1798,7 +1798,7 @@ class DIE:
         return TypeName.is_stl_internal( DIE.get_name( die, dies ) )
 
     @staticmethod
-    def is_local_class( die ):
+    def is_local_type( die ):
         # todo
         return False
 
@@ -2048,8 +2048,8 @@ class Application:
             if self.config.debug:
                 self._print_structs( types )
 
-            print( 'Compacting classes...' )
-            packed_types = self._compact_types( types )
+            print( 'Compacting structs...' )
+            packed_types = self._compact_structs( types )
 
             print( '... and finally:' )
             self._print_diff_of_structs( packed_types )
@@ -2100,7 +2100,7 @@ class Application:
         for id, type in types.items():
             type.accept( print_output_visitor, id )
 
-    def _compact_types( self, types ):
+    def _compact_structs( self, types ):
         visitor = CompactStructVisitor()
 
         packed_types = []
@@ -2152,8 +2152,8 @@ def process_argv( argv ):
     parser = argparse.ArgumentParser(
         formatter_class=argparse.RawDescriptionHelpFormatter,
         description =
-            "ClassCompacter reads object (*.o) file in ELF format and using DWARF debug info"
-            " detects types and theirs members, calculates padding and tries such shuffle with"
+            "StructCompacter reads object (*.o) file in ELF format and using DWARF debug info"
+            " detects structs and theirs members, calculates padding and tries such shuffle with"
             " members to minimalize padding space.",
 
         epilog =
@@ -2161,7 +2161,7 @@ def process_argv( argv ):
             "cc.py application.o\n"
             "cc.py -d -t SomeType application.o\n"
             "cc.py -o stdout application.o\n"
-            "Author: Lukasz Czerwinski (wo3kie@gmail.com)(https://github.com/wo3kie/ClassCompacter)"
+            "Author: Lukasz Czerwinski (wo3kie@gmail.com)(https://github.com/wo3kie/StructCompacter)"
     )
 
     parser.add_argument(
