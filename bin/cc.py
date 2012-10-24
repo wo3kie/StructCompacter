@@ -271,6 +271,8 @@ class IType( IVisitable ):
 
         self.alignment = None
 
+        self.is_valid = True
+
     def get_name( self, width = None ):
         if width == None:
             return self._get_name()
@@ -298,11 +300,11 @@ class IType( IVisitable ):
     def get_alignment( self ):
         return self.alignment
 
-    def get_is_completely_defined( self ):
-        pass
+    def set_is_valid( self, is_valid ):
+        self.is_valid = is_valid
 
-    def get_is_well_defined( self ):
-        pass
+    def get_is_valid( self ):
+        return self.is_valid
 
     # details
 
@@ -319,12 +321,6 @@ class DeclarationType( IType ):
     def __init__( self, name ):
         IType.__init__( self, name, None )
 
-    def get_is_well_defined( self ):
-        return self.size > 0
-
-    def get_is_completely_defined( self ):
-        return False
-
     def _decorate_name( self, name ):
         return 'd{' + name + '}'
 
@@ -333,7 +329,7 @@ class DeclarationType( IType ):
 
 class UnknownType( IType ):
     def __init__( self, reason ):
-        IType.__init__( self, 'unknown', None )
+        IType.__init__( self, 'Unknown', None )
 
         self.reason = reason
 
@@ -353,12 +349,6 @@ class PtrType( IType ):
 
     def set_size( self, size ):
         raise TypeNotWellDefinedError( 'set_size is not allowed for PtrType' )
-
-    def get_is_completely_defined( self ):
-        return True
-
-    def get_is_well_defined( self ):
-        return True
 
     # details
 
@@ -382,12 +372,6 @@ class RefType( IType ):
     def set_size( self, size ):
         raise TypeNotWellDefinedError( 'set_size is not allowed for RefType' )
 
-    def get_is_completely_defined( self ):
-        return True
-
-    def get_is_well_defined( self ):
-        return True
-
     # details
 
     def _get_name( self ):
@@ -404,12 +388,6 @@ class ConstType( IType ):
         IType.__init__( self, 'Const', None )
 
         self.type = type
-
-    def get_is_completely_defined( self ):
-        return self.type.get_is_well_defined()
-
-    def get_is_well_defined( self ):
-        return self.type.get_is_well_defined()
 
     def get_size( self ):
         return self.type.get_size()
@@ -440,12 +418,6 @@ class VolatileType( IType ):
     def set_size( self, size ):
         self.type.set_size( size )
 
-    def get_is_completely_defined( self ):
-        return self.type.get_is_well_defined()
-
-    def get_is_well_defined( self ):
-        return self.type.get_is_well_defined()
-
     # details
 
     def _get_name( self ):
@@ -466,23 +438,11 @@ class BaseType( IType ):
     def set_size( self, size ):
         raise TypeNotWellDefinedError( 'set_size is not allowed for BaseType' )
 
-    def get_is_completely_defined( self ):
-        return True
-
-    def get_is_well_defined( self ):
-        return True
-
 class UnionType( IType ):
     def __init__( self, name, size ):
         precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, name, size )
-
-    def get_is_completely_defined( self ):
-        return True
-
-    def get_is_well_defined( self ):
-        return True
 
     # details
 
@@ -497,12 +457,6 @@ class ArrayType( IType ):
         IType.__init__( self, 'Array', None )
 
         self.type = type
-
-    def get_is_completely_defined( self ):
-        return self.get_type().get_is_well_defined()
-
-    def get_is_well_defined( self ):
-        return self.get_type().get_is_well_defined()
 
     def get_brief_desc( self ):
         if self.get_size() == None:
@@ -554,12 +508,12 @@ class StructType( IType ):
 
         result += '('
 
-        if self.get_is_well_defined():
+        if is_type_well_defined( self ):
             result += 'W'
         else:
             result += ' '
 
-        if self.get_is_completely_defined():
+        if is_type_completely_defined( self ):
             result += 'C'
         else:
             result += ' '
@@ -625,26 +579,6 @@ class StructType( IType ):
         for member in members:
             self.add_member( member )
 
-    def get_is_completely_defined( self ):
-        for member in self.members:
-            if member.get_type().get_is_completely_defined() == False:
-                return False
-
-        return True
-
-    def get_is_well_defined( self ):
-        if self.get_size() == 0:
-            return False
-
-        if self.get_alignment() == None:
-            return False
-
-        for member in self.members:
-            if member.get_type().get_is_well_defined() == False:
-                return False
-
-        return True
-
     # details
 
     def _decorate_name( self, name ):
@@ -658,12 +592,6 @@ class EnumType( IType ):
         precondition( TypeSize.validate( size ) )
 
         IType.__init__( self, name, size )
-
-    def get_is_completely_defined( self ):
-        return True
-
-    def get_is_well_defined( self ):
-        return True
 
     # details
 
@@ -681,12 +609,6 @@ class PaddingType( IType ):
 
     def get_alignment( self ):
         return 1
-
-    def get_is_completely_defined( self ):
-        return True
-
-    def get_is_well_defined( self ):
-        return True
 
     # details
 
@@ -767,6 +689,9 @@ def try_set_alignment( type, alignment ):
         type.set_alignment( alignment )
 
 def fix_size_and_alignment( struct ):
+    if struct.get_is_valid() == False:
+        return
+
     members = struct.get_members()
 
     if len( members ) == 0:
@@ -781,6 +706,7 @@ def fix_size_and_alignment( struct ):
         member_size = members[ i + 1 ].get_this_offset() - members[ i ].get_this_offset()
 
         if member_size <= 0:
+            struct.set_is_valid( False )
             raise EBOError( 'EBO for type %s' % struct.get_name() )
 
         fix_size_and_alignment_aux( members[ i ], member_size )
@@ -789,6 +715,7 @@ def fix_size_and_alignment( struct ):
     member_size = struct.get_size() - members[ -1 ].get_this_offset()
 
     if member_size <= 0:
+        struct.set_is_valid( False )
         raise EBOError( 'EBO for type %s' % struct.get_name() )
 
     fix_size_and_alignment_aux( members[ -1 ], member_size )
@@ -810,6 +737,9 @@ def find_and_create_padding_members( struct ):
         padding_this_offset = previous_member.get_this_offset() + previous_member.get_size()
         return Padding( PaddingType( padding_size ), padding_this_offset )
 
+    if struct.get_is_valid() == False:
+        return
+
     members = struct.get_members()
     members_and_paddings = []
 
@@ -819,9 +749,11 @@ def find_and_create_padding_members( struct ):
     for i in range( 0, len( members ) - 1 ):
         current = members[ i ]
         next = members[ i + 1 ]
+
         padding_size = next.get_this_offset() - current.get_this_offset() - current.get_size()
 
         if padding_size < 0:
+            struct.set_is_valid( False )
             raise EBOError( 'EBO for type %s' % struct.get_name() )
 
         members_and_paddings.append( current )
@@ -833,6 +765,7 @@ def find_and_create_padding_members( struct ):
     padding_size = struct.get_size() - current.get_this_offset() - current.get_size()
 
     if padding_size < 0:
+        struct.set_is_valid( False )
         raise EBOError( 'EBO for type %s' % struct.get_name() )
 
     members_and_paddings.append( current )
@@ -1024,15 +957,166 @@ class PrintStructVisitor( ITypeVisitor ):
             if struct._get_name() not in self.config.types:
                 return
 
-        if TypeName.is_template( struct._get_name() ):
-            return
+        #if TypeName.is_template( struct._get_name() ):
+        #    return
 
-        if TypeName.is_stl_internal( struct._get_name() ):
-            return
+        #if TypeName.is_stl_internal( struct._get_name() ):
+        #    return
 
         id = args[0]
 
         print( '%x %s' % ( id, struct.get_full_desc() ) )
+
+#
+# IsTypeWellDefinedVisitor
+#
+class IsTypeWellDefinedVisitor( ITypeVisitor ):
+    def __init__( self ):
+        ITypeVisitor.__init__( self )
+
+    def visit_unknown_type( self, unknown, * args ):
+        self.is_well_defined = self._visit_unknown_type_impl( unknown, * args )
+
+    def visit_declaration_type( self, declaration, * args ):
+        self.is_well_defined = self._visit_declaration_type_impl( declaration, * args )
+
+    def visit_ptr_type( self, ptr, * args ):
+        self.is_well_defined = True
+
+    def visit_ref_type( self, ref, * args ):
+        self.is_well_defined = True
+
+    def visit_const_type( self, const, * args ):
+        self.is_well_defined = is_type_well_defined( const.get_type() )
+
+    def visit_volatile_type( self, volatile, * args ):
+        self.is_well_defined = is_type_well_defined( volatile.get_type() )
+
+    def visit_base_type( self, base, * args ):
+        self.is_well_defined = True
+
+    def visit_union_type( self, union, * args ):
+        self.is_well_defined = True
+
+    def visit_array_type( self, array, * args ):
+        self.is_well_defined = is_type_well_defined( array.get_type() )
+
+    def visit_struct_type( self, struct, * args ):
+        self.is_well_defined = self._visit_struct_type_impl( struct, * args )
+
+    def visit_enum_type( self, enum, * args ):
+        self.is_well_defined = True
+
+    def visit_padding_type( self, padding, * args ):
+        self.is_well_defined = True
+
+    def get( self ):
+        return self.is_well_defined
+
+    # details
+
+    def _visit_unknown_type_impl( self, unknown, * args ):
+        if unknown.get_size() == None:
+            return False
+
+        if unknown.get_size() <= 0:
+            return False
+
+        return True
+
+    def _visit_declaration_type_impl( self, declaration, * args ):
+        if declaration.get_size() == None:
+            return False
+
+        if declaration.get_size() <= 0:
+            return False
+
+        return True
+
+    def _visit_struct_type_impl( self, struct, * args ):
+        if struct.get_size() == None:
+            return False
+
+        if struct.get_size() == 0:
+            return False
+
+        if struct.get_alignment() == None:
+            return False
+
+        for member in struct.get_members():
+            if is_type_well_defined( member.get_type() ) == False:
+                return False
+
+        return True
+
+def is_type_well_defined( type ):
+    visitor = IsTypeWellDefinedVisitor()
+
+    type.accept( visitor )
+
+    return visitor.get()
+
+#
+# IsTypeWellDefinedVisitor
+#
+class IsTypeCompletelyDefinedVisitor( ITypeVisitor ):
+    def __init__( self ):
+        ITypeVisitor.__init__( self )
+
+    def visit_unknown_type( self, unknown, * args ):
+        self.is_completely_defined = False
+
+    def visit_declaration_type( self, declaration, * args ):
+        self.is_completely_defined = False
+
+    def visit_ptr_type( self, ptr, * args ):
+        self.is_completely_defined = True
+
+    def visit_ref_type( self, ref, * args ):
+        self.is_completely_defined = True
+
+    def visit_const_type( self, const, * args ):
+        self.is_completely_defined = is_type_completely_defined( const.get_type() )
+
+    def visit_volatile_type( self, volatile, * args ):
+        self.is_completely_defined = is_type_completely_defined( volatile.get_type() )
+
+    def visit_base_type( self, base, * args ):
+        self.is_completely_defined = True
+
+    def visit_union_type( self, union, * args ):
+        self.is_completely_defined = True
+
+    def visit_array_type( self, array, * args ):
+        self.is_completely_defined = is_type_completely_defined( array.get_type() )
+
+    def visit_struct_type( self, struct, * args ):
+        self.is_completely_defined = self._visit_struct_type_impl( struct, * args )
+
+    def visit_enum_type( self, enum, * args ):
+        self.is_completely_defined = True
+
+    def visit_padding_type( self, padding, * args ):
+        self.is_completely_defined = True
+
+    def get( self ):
+        return self.is_completely_defined
+
+    # details
+
+    def _visit_struct_type_impl( self, struct, * args ):
+        for member in struct.get_members():
+            if is_type_completely_defined( member.get_type() ) == False:
+                return False
+
+        return True
+
+def is_type_completely_defined( type ):
+    visitor = IsTypeCompletelyDefinedVisitor()
+
+    type.accept( visitor )
+
+    return visitor.get()
 
 #
 # INode
@@ -1282,8 +1366,11 @@ class StructCompacter:
         self.struct = None
 
     def process( self, struct ):
-        #if struct.get_is_well_defined() == False:
+        #if is_type_well_defined( struct ) == False:
         #    return None
+
+        if struct.get_is_valid() == False:
+            return None
 
         if calculate_total_padding( struct ) < struct.get_alignment():
             return None
@@ -1944,8 +2031,14 @@ class Application:
             print( 'Reading DWARF (may take some time)...' )
             types = self._read_DWARF( file_name )
 
+            if self.config.debug:
+                self._print_structs( types )
+
             print( 'Fixing types...' )
             types = self._fix_types( types )
+
+            if self.config.debug:
+                self._print_structs( types )
 
             print( 'Finding paddings...' )
             types = self._detect_padding( types )
@@ -1989,7 +2082,7 @@ class Application:
                 print_diff_of_structs( struct, packed, self.config.columns )
                 print( '\n' )
             else:
-                file_name = struct.get_name() + '.cc'
+                file_name = struct.get_name() + '.sc'
                 file = open( file_name, 'w' )
 
                 print( 'File', file_name, 'created.' )
@@ -2105,7 +2198,7 @@ def process_argv( argv ):
         default=50,
         type=int,
         help=
-            'Width of output in columns (Not less than 40).'
+            'Width of output in columns (Not less than 30).'
     )
 
     parser.add_argument(
@@ -2117,7 +2210,7 @@ def process_argv( argv ):
 
     result = parser.parse_args( argv )
 
-    result.columns = max( 40, result.columns )
+    result.columns = max( 30, result.columns )
 
     return result
 
