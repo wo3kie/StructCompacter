@@ -1348,7 +1348,7 @@ class MemberList:
 
     def insert( self, pos, node ):
         if self.members_back == pos:
-            self.__append( node )
+            self.append( node )
         else:
             node.next = pos.next
             node.next.prev = node
