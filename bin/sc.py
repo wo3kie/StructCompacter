@@ -1333,7 +1333,7 @@ class MemberList:
 
     def erase( self, node ):
         if self.members_back == node:
-            self.__pop_back()
+            self.pop_back()
             return None
 
         node.prev.next = node.next
