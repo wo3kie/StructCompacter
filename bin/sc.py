@@ -898,22 +898,26 @@ def calculate_total_padding( struct ):
 
     return total_padding_visitor.get()
 
+def format_member( member, width ):
+    this_offset = ' (+' + str( member.get_this_offset() ) + ')'
+    this_offset_len = len( this_offset )
+
+    name_len = ( width // 2 ) - this_offset_len
+    name = member.get_name( name_len )
+
+    type_len = ( width // 2 )
+    type = get_desc( member.get_type(), type_len )
+
+    return \
+        ('{: <' + str( name_len ) + '}').format( name ) \
+        + ('{: >' + str( this_offset_len ) + '}').format( this_offset ) \
+        + ('{: <' + str( type_len ) + '}').format( type )
+
+def print_struct( struct, width ):
+    for member in struct.get_members():
+        print( format_member( member, width ) )
+
 def print_diff_of_structs( struct1, struct2, width ):
-    def _format( member, width ):
-        this_offset = ' (+' + str( member.get_this_offset() ) + ')'
-        this_offset_len = len( this_offset )
-
-        name_len = ( width // 2 ) - this_offset_len
-        name = member.get_name( name_len )
-
-        type_len = ( width // 2 )
-        type = get_desc( member.get_type(), type_len )
-
-        return \
-            ('{: <' + str( name_len ) + '}').format( name ) \
-            + ('{: >' + str( this_offset_len ) + '}').format( this_offset ) \
-            + ('{: <' + str( type_len ) + '}').format( type )
-
     struct_name = struct1.get_name()
     struct1_size = str( struct1.get_size() )
     struct2_size = str( struct2.get_size() )
@@ -926,7 +930,7 @@ def print_diff_of_structs( struct1, struct2, width ):
     for i in range( min( members_size, compacted_size ) ):
         member1 = struct1.get_members()[ i ]
         member2 = struct2.get_members()[ i ]
-        print( _format( member1, width ), '|', _format( member2, width ) )
+        print( format_member( member1, width ), '|', format_member( member2, width ) )
 
     if members_size == compacted_size:
         return
@@ -937,13 +941,13 @@ def print_diff_of_structs( struct1, struct2, width ):
     if members_size > compacted_size:
         for i in range( compacted_size, members_size ):
             member1 = struct1.get_members()[ i ]
-            print( _format( member1, width ), '|', empty_member_string )
+            print( format_member( member1, width ), '|', empty_member_string )
 
     # -                    | member type
     if members_size < compacted_size:
         for i in range( members_size, compacted_size ):
             member2 = struct2.get_members()[ i ]
-            print( empty_member_string, '|', _format( member2, width ) )
+            print( empty_member_string, '|', format_member( member2, width ) )
 
 #
 # PrintStructVisitor
@@ -2052,7 +2056,12 @@ class Application:
             packed_types = self._compact_structs( types )
 
             print( '... and finally:' )
-            self._print_diff_of_structs( packed_types )
+
+            if self.config.diff:
+                self._print_diff_of_structs( packed_types )
+            else:
+                self._dump_structs_to_files( packed_types )
+
             print( 'Done.' )
 
         except EBOError as e:
@@ -2075,8 +2084,32 @@ class Application:
     def _get_types( self ):
         return self.die_reader.get_types()
 
-    def _print_diff_of_structs( self, struct_packed ):
-        for ( struct, packed ) in struct_packed:
+    def _dump_structs_to_files( self, packed_structs ):
+        for ( struct, packed ) in packed_structs:
+            if packed == None:
+                continue
+
+            struct_file_name = struct.get_name() + '.old.' + str( struct.get_size() ) + '.sc'
+            packed_file_name = struct.get_name() + '.new.' + str( packed.get_size() ) + '.sc'
+
+            struct_file = open( struct_file_name, 'w' )
+            packed_file = open( packed_file_name, 'w' )
+
+            print( 'Files', struct_file_name, packed_file_name, 'created' )
+
+            sys.stdout = struct_file
+            print_struct( struct, self.config.columns )
+
+            sys.stdout = packed_file
+            print_struct( packed, self.config.columns )
+
+            struct_file.close()
+            packed_file.close()
+
+            sys.stdout = sys.__stdout__
+
+    def _print_diff_of_structs( self, packed_structs ):
+        for ( struct, packed ) in packed_structs:
             if packed == None:
                 continue
 
@@ -2204,6 +2237,14 @@ def process_argv( argv ):
     )
 
     parser.add_argument(
+        '--diff',
+        action='store_true',
+        default=False,
+        help=
+            'Shows simple diff instead of creating files (.old/.new)'
+    );
+
+    parser.add_argument(
         'file',
         nargs=1,
         help=
@@ -2212,7 +2253,17 @@ def process_argv( argv ):
 
     result = parser.parse_args( argv )
 
+    # check --columns
+    #
     result.columns = max( 30, result.columns )
+
+    # check --diff & --stdout
+    #
+    if result.diff == False and result.output == 'stdout':
+        if result.warnings:
+            result.output = ''
+
+            print( 'Warning: Option --output=stdout ignored if used without --diff' )
 
     return result
 
