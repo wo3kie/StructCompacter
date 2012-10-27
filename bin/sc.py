@@ -726,9 +726,10 @@ def calculate_alignment_based_on_members( struct ):
     alignment = 1
 
     for member in struct.get_members():
-        alignment = max( alignment, member.get_type().get_alignment() )
+        if member.get_type().get_alignment() != None:
+            alignment = max( alignment, member.get_type().get_alignment() )
 
-    struct.set_alignment( alignment )
+    return gcd( alignment, struct.get_size() )
 
 def fix_size_and_alignment( struct ):
     if struct.get_is_valid() == False:
@@ -740,8 +741,6 @@ def fix_size_and_alignment( struct ):
         try_set_alignment( struct, min( struct.get_size(), 8 ) )
 
         return
-
-    try_set_alignment( struct, Alignment.get_from_sizeof( struct.get_size() ) )
 
     # resolve all but last
     for i in range( 0, len( members ) -1 ):
@@ -760,7 +759,9 @@ def fix_size_and_alignment( struct ):
 
     fix_size_and_alignment_aux( members[ -1 ], member_size )
 
-    calculate_alignment_based_on_members( struct )
+    struct.set_alignment( calculate_alignment_based_on_members( struct ) )
+
+    postcondition( Alignment.validate( struct.get_alignment(), struct.get_size() ) )
 
 def fix_size_and_alignment_aux( member, size ):
     if member.get_type().get_size() == None:
@@ -1523,27 +1524,27 @@ class StructCompacter:
         self.members.append( ebo_inheritance )
 
     def _process_ebo_inheritance_inheritance( self, tail, inheritance ):
-        self._add_unaligned_member( inheritance )
+        inheritance.set_this_offset( tail.get_end() )
+        self.members.append( ebo_inheritance )
 
     def _process_ebo_inheritance_ebo_inheritance( self, tail, ebo_inheritance ):
         ebo_inheritance.set_this_offset( tail.get_end() )
         self.members.append( ebo_inheritance )
 
     def _process_ebo_inheritance_member( self, tail, member ):
-        member.set_this_offset( tail.get_end() )
-        self.members.append( member )
+        self._add_unaligned_member( member )
 
     def _process_ebo_inheritance_padding( self, tail, padding ):
         self._add_unaligned_member( padding )
 
     def _process_ebo_inheritance_end( self, tail, end ):
-        return
+        self._add_back_padding()
 
     def _process_inheritance_end( self, tail, end ):
-        return
+        self._add_back_padding()
 
-    def _process_member_end( self, tail, end ):
-        struct_end = tail.get_end()
+    def _add_back_padding( self ):
+        struct_end = self.members.back().get_end()
         aligned_struct_end = Alignment.get_aligned_up( struct_end, self.struct.get_alignment() )
 
         back_padding_size = aligned_struct_end - struct_end
@@ -1553,6 +1554,9 @@ class StructCompacter:
 
         back_padding = PaddingNode( PaddingType( back_padding_size ), struct_end )
         self.members.append( back_padding )
+
+    def _process_member_end( self, tail, end ):
+        self._add_back_padding()
 
     def _process_padding_end( self, tail, end ):
         back_padding_this_offset = tail.get_this_offset()
@@ -2160,14 +2164,22 @@ class Application:
     def _get_types( self ):
         return self.die_reader.get_types()
 
+    def _check_types_filter( self, struct ):
+        if len( self.config.types ) == 0:
+            return True
+
+        if struct._get_name() in self.config.types:
+            return True
+
+        return False
+
     def _dump_structs_to_files( self, packed_structs ):
         for ( struct, packed ) in packed_structs:
             if packed == None:
                 continue
 
-            if len( self.config.types ) > 0:
-                if struct._get_name() not in self.config.types:
-                    continue
+            if self._check_types_filter( struct ) == False:
+                continue
 
             struct_file_name = struct.get_name() + '.old.' + str( struct.get_size() ) + '.sc'
             packed_file_name = struct.get_name() + '.new.' + str( packed.get_size() ) + '.sc'
@@ -2193,9 +2205,8 @@ class Application:
             if packed == None:
                 continue
 
-            if len( self.config.types ) > 0:
-                if struct._get_name() not in self.config.types:
-                    continue
+            if self._check_types_filter( struct ) == False:
+                continue
 
             if self.config.stdout:
                 print_diff_of_structs( struct, packed, self.config.columns )
@@ -2215,9 +2226,8 @@ class Application:
         print_output_visitor = PrintStructVisitor()
 
         for id, type in types.items():
-            if len( self.config.types ) > 0:
-                if type._get_name() not in self.config.types:
-                    continue
+            if self._check_types_filter( type ) == False:
+                continue
 
             type.accept( print_output_visitor, id )
 
@@ -2227,9 +2237,8 @@ class Application:
         packed_types = []
 
         for id, type in types.items():
-            if len( self.config.types ) > 0:
-                if type.get_name() not in self.config.types:
-                    continue
+            if self._check_types_filter( type ) == False:
+                continue
 
             try:
                 type.accept( visitor, None )
