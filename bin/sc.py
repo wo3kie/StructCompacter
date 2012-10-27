@@ -995,6 +995,65 @@ def print_diff_of_structs( struct1, struct2, width ):
             print( empty_member_string, '|', format_member( member2, width ) )
 
 #
+# IsTemplateParamDependentVisitor
+#
+class IsTemplateParamDependentVisitor( ITypeVisitor ):
+    def __init__( self ):
+        ITypeVisitor.__init__( self )
+
+        self.is_dependent = False
+
+    def visit_unknown_type( self, unknown, * args ):
+        self.is_dependent = True
+
+    def visit_declaration_type( self, declaration, * args ):
+        self.is_dependent = True
+
+    def visit_ptr_type( self, ptr, * args ):
+        self.is_dependent = False
+
+    def visit_ref_type( self, ref, * args ):
+        self.is_dependent = False
+
+    def visit_const_type( self, const, * args ):
+        self.is_dependent = self.visit( const.get_type() )
+
+    def visit_volatile_type( self, volatile, * args ):
+        self.is_dependent = self.visit( volatile.get_type() )
+
+    def visit_base_type( self, base, * args ):
+        self.is_dependent = True
+
+    def visit_union_type( self, union, * args ):
+        self.is_dependent = True
+
+    def visit_array_type( self, array, * args ):
+        self.is_dependent = self.visit( array.get_type() )
+
+    def visit_struct_type( self, struct, * args ):
+        self.is_dependent = True
+
+    def visit_enum_type( self, enum, * args ):
+        self.is_dependent = False
+
+    def visit_padding_type( self, padding, * args ):
+        self.is_dependent = False
+
+    def get( self ):
+        return self.is_dependent
+
+def is_template_param_dependent( struct ):
+    visitor = IsTemplateParamDependentVisitor()
+
+    for member in struct.get_members():
+        member.get_type().accept( visitor )
+
+        if visitor.get() == True:
+            return True
+
+    return False
+
+#
 # PrintStructVisitor
 #
 class PrintStructVisitor( ITypeVisitor ):
@@ -1789,11 +1848,12 @@ class CompactStructVisitor( ITypeVisitor ):
     # details
 
     def _skip_type( self, struct ):
-        if TypeName.is_template( struct.get_name() ):
-            return True
-
         if TypeName.is_stl_internal( struct.get_name() ):
             return True
+
+        if TypeName.is_template( struct.get_name() ):
+            if is_template_param_dependent( struct ):
+                return True
 
         return False
 
@@ -2187,8 +2247,6 @@ class Application:
             struct_file = open( struct_file_name, 'w' )
             packed_file = open( packed_file_name, 'w' )
 
-            print( 'Files', struct_file_name, packed_file_name, 'created' )
-
             sys.stdout = struct_file
             print_struct( struct, self.config.columns )
 
@@ -2199,6 +2257,8 @@ class Application:
             packed_file.close()
 
             sys.stdout = sys.__stdout__
+
+            print( 'Files', struct_file_name, packed_file_name, 'created' )
 
     def _print_diff_of_structs( self, packed_structs ):
         for ( struct, packed ) in packed_structs:
