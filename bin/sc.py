@@ -211,12 +211,17 @@ class Inheritance( IMember ):
             + self.type.get_name( 30 ) \
             + ' [this+' + str( self.this_offset ) + ']'
 
-class EBOInheritance( Inheritance ):
+class EBOInheritance( IMember ):
     def __init__( self, type, this_offset ):
-        Inheritance.__init__( self, '__ebo_inheritance', type, this_offset )
+        IMember.__init__( self, '__ebo_inheritance', type, this_offset )
 
     def get_size( self ):
         return 0
+
+    def get_brief_desc( self ):
+        return self.get_name( 30 ) + ' ' \
+            + self.type.get_name( 30 ) \
+            + ' [this+' + str( self.this_offset ) + ']'
 
 class Member( IMember ):
     def __init__( self, name, file_id, line_no, type, this_offset ):
@@ -413,6 +418,9 @@ class ConstType( IType ):
     def set_size( self, size ):
         self.type.set_size( size )
 
+    def get_type( self ):
+        return self.type
+
     # details
 
     def _get_name( self ):
@@ -435,6 +443,9 @@ class VolatileType( IType ):
 
     def set_size( self, size ):
         self.type.set_size( size )
+
+    def get_type( self ):
+        return self.type
 
     # details
 
@@ -526,6 +537,11 @@ class StructType( IType ):
 
         result += '('
 
+        if self.get_is_valid():
+            result += 'V'
+        else:
+            result += ' '
+
         if is_type_well_defined( self ):
             result += 'W'
         else:
@@ -567,18 +583,18 @@ class StructType( IType ):
                         % ( member.get_name(), self.get_name(), member_begin ) )
 
         # member overlaps previous member
-        last_member_begin = self.members[ -1 ].get_this_offset()
-
-        last_member_size = self.members[ -1 ].get_type().get_size()
-        if last_member_size == None:
-            last_member_size = 0
-
-        last_member_end = last_member_begin + last_member_size
-
-        if member_begin < last_member_end:
-            raise TypeNotWellDefinedError( \
-                'Member %s in struct %s lays before previous member end (this+%d/this+%d)' \
-                    % ( member.get_name(), self.get_name(), member_begin, last_member_end ) )
+        #last_member_begin = self.members[ -1 ].get_this_offset()
+        #
+        #last_member_size = self.members[ -1 ].get_type().get_size() <- not EBOInheritance here yet
+        #if last_member_size == None:
+        #    last_member_size = 0
+        #
+        #last_member_end = last_member_begin + last_member_size
+        #
+        #if member_begin < last_member_end:
+        #    raise TypeNotWellDefinedError( \
+        #        'Member %s in struct %s lays before previous member end (this+%d/this+%d)' \
+        #            % ( member.get_name(), self.get_name(), member_begin, last_member_end ) )
 
         # member out of a struct
         if member_begin >= self.get_size():
@@ -706,6 +722,14 @@ def try_set_alignment( type, alignment ):
     if type.get_alignment() == None or type.get_alignment() > alignment:
         type.set_alignment( alignment )
 
+def calculate_alignment_based_on_members( struct ):
+    alignment = 1
+
+    for member in struct.get_members():
+        alignment = max( alignment, member.get_type().get_alignment() )
+
+    struct.set_alignment( alignment )
+
 def fix_size_and_alignment( struct ):
     if struct.get_is_valid() == False:
         return
@@ -724,8 +748,7 @@ def fix_size_and_alignment( struct ):
         member_size = members[ i + 1 ].get_this_offset() - members[ i ].get_this_offset()
 
         if member_size <= 0:
-            struct.set_is_valid( False )
-            raise EBOError( 'EBO for type %s' % struct.get_name() )
+            members[ i ] = EBOInheritance( members[ i ].get_type(), members[ i ].get_this_offset() )
 
         fix_size_and_alignment_aux( members[ i ], member_size )
 
@@ -733,10 +756,11 @@ def fix_size_and_alignment( struct ):
     member_size = struct.get_size() - members[ -1 ].get_this_offset()
 
     if member_size <= 0:
-        struct.set_is_valid( False )
-        raise EBOError( 'EBO for type %s' % struct.get_name() )
+        members[ i ] = EBOInheritance( members[ i ].get_type(), members[ i ].get_this_offset() )
 
     fix_size_and_alignment_aux( members[ -1 ], member_size )
+
+    calculate_alignment_based_on_members( struct )
 
 def fix_size_and_alignment_aux( member, size ):
     if member.get_type().get_size() == None:
@@ -772,7 +796,7 @@ def find_and_create_padding_members( struct ):
 
         if padding_size < 0:
             struct.set_is_valid( False )
-            raise EBOError( 'EBO for type %s' % struct.get_name() )
+            raise TypeNotWellDefinedError( 'Padding size < 0 in type %s' % struct.get_name() )
 
         members_and_paddings.append( current )
 
@@ -784,7 +808,7 @@ def find_and_create_padding_members( struct ):
 
     if padding_size < 0:
         struct.set_is_valid( False )
-        raise EBOError( 'EBO for type %s' % struct.get_name() )
+        raise TypeNotWellDefinedError( 'Padding size < 0 in type %s' % struct.get_name() )
 
     members_and_paddings.append( current )
 
@@ -1185,6 +1209,9 @@ class EBOInheritanceNode( INode ):
     def __init__( self, type, this_offset ):
         INode.__init__( self, '__ebo_inheritance', type, this_offset )
 
+    def get_size( self ):
+        return 0
+
     def __str__( self ):
         return 'EBOInheritance ' + get_desc( self.type )
 
@@ -1225,6 +1252,7 @@ class INodeVisitor:
         self.dispatcher[ HeadNode ] = self.visit_head_node
         self.dispatcher[ MemberNode ] = self.visit_member_node
         self.dispatcher[ InheritanceNode ] = self.visit_inheritance_node
+        self.dispatcher[ EBOInheritanceNode ] = self.visit_ebo_inheritance_node
         self.dispatcher[ PaddingNode ] = self.visit_padding_node
 
     def visit( self, node, * args ):
@@ -1237,6 +1265,9 @@ class INodeVisitor:
         return self.default_handler( self, member, * args )
 
     def visit_inheritance_node( self, inheritance, * args ):
+        return self.default_handler( self, inheritance, * args )
+
+    def visit_ebo_inheritance_node( self, inheritance, * args ):
         return self.default_handler( self, inheritance, * args )
 
     def visit_padding_node( self, padding, * args ):
@@ -1255,7 +1286,7 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
         self.node = InheritanceNode( inheritance.get_type(), None )
 
     def visit_ebo_inheritance( self, ebo_inheritance, * args ):
-        self.node = EBOInheritanceNode( inheritance.get_type(), None )
+        self.node = EBOInheritanceNode( ebo_inheritance.get_type(), None )
 
     def visit_member( self, member, * args ):
         self.node = MemberNode( member.get_name(), member.get_type(), None )
@@ -1318,6 +1349,9 @@ class NodeToTypeConversionVisitor( INodeVisitor ):
 
     def visit_inheritance_node( self, inheritance, * args ):
         self.type = Inheritance( inheritance.get_type(), inheritance.get_this_offset() )
+
+    def visit_ebo_inheritance_node( self, ebo_inheritance, * args ):
+        self.type = EBOInheritance( ebo_inheritance.get_type(), ebo_inheritance.get_this_offset() )
 
     def get_type( self ):
         return self.type
@@ -1460,12 +1494,18 @@ class StructCompacter:
         self.dispatcher = {}
 
         self.dispatcher[ ( HeadNode, InheritanceNode ) ] = self._process_head_inheritance
+        self.dispatcher[ ( HeadNode, EBOInheritanceNode ) ] = self._process_head_ebo_inheritance
         self.dispatcher[ ( HeadNode, MemberNode ) ] = self._process_head_member
         self.dispatcher[ ( HeadNode, PaddingNode ) ] = self._process_head_padding
 
         self.dispatcher[ ( InheritanceNode, InheritanceNode ) ] = self._process_inheritance_inheritance
         self.dispatcher[ ( InheritanceNode, MemberNode ) ] = self._process_inheritance_member
         self.dispatcher[ ( InheritanceNode, PaddingNode ) ] = self._process_inheritance_padding
+
+        self.dispatcher[ ( EBOInheritanceNode, InheritanceNode ) ] = self._process_ebo_inheritance_inheritance
+        self.dispatcher[ ( EBOInheritanceNode, EBOInheritanceNode ) ] = self._process_ebo_inheritance_ebo_inheritance
+        self.dispatcher[ ( EBOInheritanceNode, MemberNode ) ] = self._process_ebo_inheritance_member
+        self.dispatcher[ ( EBOInheritanceNode, PaddingNode ) ] = self._process_ebo_inheritance_padding
 
         self.dispatcher[ ( MemberNode, MemberNode ) ] = self._process_member_member
         self.dispatcher[ ( MemberNode, PaddingNode ) ] = self._process_member_padding
@@ -1474,8 +1514,30 @@ class StructCompacter:
         self.dispatcher[ ( PaddingNode, PaddingNode ) ] = self._process_padding_padding
 
         self.dispatcher[ ( InheritanceNode, EndNode ) ] = self._process_inheritance_end
+        self.dispatcher[ ( EBOInheritanceNode, EndNode ) ] = self._process_ebo_inheritance_end
         self.dispatcher[ ( MemberNode, EndNode ) ] = self._process_member_end
         self.dispatcher[ ( PaddingNode, EndNode ) ] = self._process_padding_end
+
+    def _process_head_ebo_inheritance( self, tail, ebo_inheritance ):
+        ebo_inheritance.set_this_offset( 0 )
+        self.members.append( ebo_inheritance )
+
+    def _process_ebo_inheritance_inheritance( self, tail, inheritance ):
+        self._add_unaligned_member( inheritance )
+
+    def _process_ebo_inheritance_ebo_inheritance( self, tail, ebo_inheritance ):
+        ebo_inheritance.set_this_offset( tail.get_end() )
+        self.members.append( ebo_inheritance )
+
+    def _process_ebo_inheritance_member( self, tail, member ):
+        member.set_this_offset( tail.get_end() )
+        self.members.append( member )
+
+    def _process_ebo_inheritance_padding( self, tail, padding ):
+        self._add_unaligned_member( padding )
+
+    def _process_ebo_inheritance_end( self, tail, end ):
+        return
 
     def _process_inheritance_end( self, tail, end ):
         return
@@ -2063,7 +2125,7 @@ class Application:
             print( 'Finding paddings...' )
             types = self._detect_padding( types )
 
-            if self.config.debug:
+            if self.config.verbose:
                 self._print_structs( types )
 
             print( 'Compacting structs...' )
@@ -2135,7 +2197,7 @@ class Application:
                 if struct._get_name() not in self.config.types:
                     continue
 
-            if self.config.output == 'stdout':
+            if self.config.stdout:
                 print_diff_of_structs( struct, packed, self.config.columns )
                 print( '\n' )
             else:
@@ -2192,6 +2254,9 @@ class Application:
             except EBOError as error:
                 if self.config.warnings:
                     print( 'Warning: ', error )
+            except TypeNotWellDefinedError as error:
+                if self.config.warnings:
+                    print( 'Warning: ', error )
 
         return types
 
@@ -2232,7 +2297,7 @@ def process_argv( argv ):
     )
 
     parser.add_argument(
-        '-d', '--debug',
+        '-v', '--verbose',
         action='store_true',
         default=False,
         help=
@@ -2240,10 +2305,11 @@ def process_argv( argv ):
     )
 
     parser.add_argument(
-        '-o', '--output',
-        default='files',
+        '-s', '--stdout',
+        action='store_true',
+        default=False,
         help=
-            'Output redirection (files/stdout).'
+            'Output redirection to stdout instead of create files.'
     )
 
     parser.add_argument(
@@ -2263,7 +2329,7 @@ def process_argv( argv ):
     )
 
     parser.add_argument(
-        '--diff',
+        '-d', '--diff',
         action='store_true',
         default=False,
         help=
@@ -2283,13 +2349,10 @@ def process_argv( argv ):
     #
     result.columns = max( 30, result.columns )
 
-    # check --diff & --stdout
+    # check diff & stdout
     #
-    if result.diff == False and result.output == 'stdout':
-        if result.warnings:
-            result.output = ''
-
-            print( 'Warning: Option --output=stdout ignored if used without --diff' )
+    if result.stdout:
+        result.diff = True
 
     return result
 
