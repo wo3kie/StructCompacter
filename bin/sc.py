@@ -179,8 +179,17 @@ class IMember( IVisitable ):
 
         self.this_offset = this_offset
 
+    def get_begin( self ):
+        return self.get_this_offset()
+
+    def get_end( self ):
+        return self.get_this_offset() + self.get_size()
+
     def get_size( self ):
         return self.type.get_size()
+
+    def set_size( self, new_size ):
+        self.type.set_size( new_size )
 
     def get_brief_desc( self ):
         pass
@@ -201,6 +210,13 @@ class Inheritance( IMember ):
         return self.get_name( 30 ) + ' ' \
             + self.type.get_name( 30 ) \
             + ' [this+' + str( self.this_offset ) + ']'
+
+class EBOInheritance( Inheritance ):
+    def __init__( self, type, this_offset ):
+        Inheritance.__init__( self, '__ebo_inheritance', type, this_offset )
+
+    def get_size( self ):
+        return 0
 
 class Member( IMember ):
     def __init__( self, name, file_id, line_no, type, this_offset ):
@@ -859,6 +875,7 @@ class IMemberVisitor:
 
         self.dispatcher[ Member ] = self.visit_member
         self.dispatcher[ Inheritance ] = self.visit_inheritance
+        self.dispatcher[ EBOInheritance ] = self.visit_ebo_inheritance
         self.dispatcher[ Padding ] = self.visit_padding
 
     def visit( self, interface, * args ):
@@ -869,6 +886,9 @@ class IMemberVisitor:
 
     def visit_inheritance( self, inheritance, * args ):
         return self.default_handler( self, inheritance, * args )
+
+    def visit_ebo_inheritance( self, ebo_inheritance, * args ):
+        return self.default_handler( self, ebo_inheritance, * args )
 
     def visit_padding( self, padding, * args ):
         return self.default_handler( self, padding, * args )
@@ -953,16 +973,10 @@ def print_diff_of_structs( struct1, struct2, width ):
 # PrintStructVisitor
 #
 class PrintStructVisitor( ITypeVisitor ):
-    def __init__( self, config ):
+    def __init__( self ):
         ITypeVisitor.__init__( self )
 
-        self.config = config
-
     def visit_struct_type( self, struct, * args ):
-        if len( self.config.types ) != 0:
-            if struct._get_name() not in self.config.types:
-                return
-
         #if TypeName.is_template( struct._get_name() ):
         #    return
 
@@ -1134,9 +1148,6 @@ class INode( IMember ):
         self.next = None
         self.prev = None
 
-    def get_size( self ):
-        return self.get_type().get_size()
-
 class HeadNode( INode ):
     def __init__( self ):
         INode.__init__( self, 'Head', UnknownType( 'HeadNode' ), None )
@@ -1169,6 +1180,13 @@ class InheritanceNode( INode ):
 
     def __str__( self ):
         return 'Inheritance ' + get_desc( self.type )
+
+class EBOInheritanceNode( INode ):
+    def __init__( self, type, this_offset ):
+        INode.__init__( self, '__ebo_inheritance', type, this_offset )
+
+    def __str__( self ):
+        return 'EBOInheritance ' + get_desc( self.type )
 
 class MemberNode( INode ):
     def __init__( self, name, type, this_offset ):
@@ -1236,11 +1254,14 @@ class TypesToNodesConversionVisitor( IMemberVisitor ):
     def visit_inheritance( self, inheritance, * args ):
         self.node = InheritanceNode( inheritance.get_type(), None )
 
+    def visit_ebo_inheritance( self, ebo_inheritance, * args ):
+        self.node = EBOInheritanceNode( inheritance.get_type(), None )
+
     def visit_member( self, member, * args ):
         self.node = MemberNode( member.get_name(), member.get_type(), None )
 
     def visit_padding( self, padding, * args ):
-        self.node = PaddingNode( PaddingType( padding.get_type().get_size() ), None )
+        self.node = PaddingNode( PaddingType( padding.get_size() ), None )
 
     def get_node( self ):
         return self.node
@@ -1386,8 +1407,7 @@ class StructCompacter:
         try:
             self._pack_members()
 
-            packed_struct_size \
-                = self.members.back().get_this_offset() + self.members.back().get_size()
+            packed_struct_size = self.members.back().get_end()
 
             if struct.get_size() == packed_struct_size:
                 return None
@@ -1461,7 +1481,7 @@ class StructCompacter:
         return
 
     def _process_member_end( self, tail, end ):
-        struct_end = tail.get_this_offset() + tail.get_size()
+        struct_end = tail.get_end()
         aligned_struct_end = Alignment.get_aligned_up( struct_end, self.struct.get_alignment() )
 
         back_padding_size = aligned_struct_end - struct_end
@@ -1572,7 +1592,7 @@ class StructCompacter:
         return True
 
     def _get_aligned_struct_size( self, alignment ):
-        struct_size = self.members.back().get_this_offset() + self.members.back().get_size()
+        struct_size = self.members.back().get_end()
         aligned_struct_size = Alignment.get_aligned_up( struct_size, alignment )
 
         return aligned_struct_size
@@ -1588,7 +1608,7 @@ class StructCompacter:
         self.members.append( member )
 
     def _get_alignment_padding( self, member ):
-        struct_end = self.members.back().get_this_offset() + self.members.back().get_size()
+        struct_end = self.members.back().get_end()
         alignment_padding_size = member.get_this_offset() - struct_end
 
         if alignment_padding_size == 0:
@@ -1624,7 +1644,7 @@ class StructCompacter:
         member.set_this_offset( member_new_this_offset )
 
         if front_padding_size != 0 and right_padding_size != 0:
-            padding.get_type().set_size( member_new_this_offset - padding.this_offset )
+            padding.set_size( member_new_this_offset - padding.this_offset )
 
             new_padding = PaddingNode( PaddingType( right_padding_size ), back_padding_this_offset )
 
@@ -1632,12 +1652,12 @@ class StructCompacter:
             self.members.insert( member, new_padding )
 
         elif front_padding_size != 0:
-            padding.get_type().set_size( front_padding_size )
+            padding.set_size( front_padding_size )
 
             self.members.insert( padding, member )
 
         elif right_padding_size != 0:
-            padding.get_type().set_size( right_padding_size )
+            padding.set_size( right_padding_size )
             padding.set_this_offset( padding.get_this_offset() + member.get_size() )
 
             self.members.insert( padding.prev, member )
@@ -2037,14 +2057,8 @@ class Application:
             print( 'Reading DWARF (may take some time)...' )
             types = self._read_DWARF( file_name )
 
-            if self.config.debug:
-                self._print_structs( types )
-
             print( 'Fixing types...' )
             types = self._fix_types( types )
-
-            if self.config.debug:
-                self._print_structs( types )
 
             print( 'Finding paddings...' )
             types = self._detect_padding( types )
@@ -2089,6 +2103,10 @@ class Application:
             if packed == None:
                 continue
 
+            if len( self.config.types ) > 0:
+                if struct._get_name() not in self.config.types:
+                    continue
+
             struct_file_name = struct.get_name() + '.old.' + str( struct.get_size() ) + '.sc'
             packed_file_name = struct.get_name() + '.new.' + str( packed.get_size() ) + '.sc'
 
@@ -2113,6 +2131,10 @@ class Application:
             if packed == None:
                 continue
 
+            if len( self.config.types ) > 0:
+                if struct._get_name() not in self.config.types:
+                    continue
+
             if self.config.output == 'stdout':
                 print_diff_of_structs( struct, packed, self.config.columns )
                 print( '\n' )
@@ -2128,9 +2150,13 @@ class Application:
                 sys.stdout = sys.__stdout__
 
     def _print_structs( self, types ):
-        print_output_visitor = PrintStructVisitor( self.config )
+        print_output_visitor = PrintStructVisitor()
 
         for id, type in types.items():
+            if len( self.config.types ) > 0:
+                if type._get_name() not in self.config.types:
+                    continue
+
             type.accept( print_output_visitor, id )
 
     def _compact_structs( self, types ):
