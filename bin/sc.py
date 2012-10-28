@@ -552,6 +552,11 @@ class StructType( IType ):
         else:
             result += ' '
 
+        if TypeName.is_template( self.get_name() ) and is_template_param_dependent( self ):
+            result += 'T'
+        else:
+            result += ' '
+
         result += ')'
 
         for member in self.members:
