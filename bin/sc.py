@@ -565,49 +565,18 @@ class StructType( IType ):
         return result
 
     def add_member( self, member ):
-        precondition( self._validate_member( member ) )
+        self._validate_member_not_none( member )
+
+        if len( self.members ) == 0:
+            self._validate_member_this0( member )
+
+        # do not validate, not EBOInheritance yet
+        #elif self.members[ -1 ].get_size() != None:
+        #    self._validate_members_layout( self.members[ -1 ], member )
+
+        self._validate_member_out_of_struct( member )
 
         self.members.append( member )
-
-    def _validate_member( self, member ):
-        # member == None
-        if member == None:
-            raise( TypeNotWellDefinedError( \
-                'Member %s in struct %s can not be None' ) \
-                    % ( member.get_name(), self.get_name() ) )
-
-        member_begin = member.get_this_offset()
-
-        # first member not at this+0
-        if len( self.members ) == 0:
-            if member_begin == 0:
-                return True
-            else:
-                raise TypeNotWellDefinedError( \
-                    'Member %s in struct %s has to be at (this+0/%d)' \
-                        % ( member.get_name(), self.get_name(), member_begin ) )
-
-        # member overlaps previous member
-        #last_member_begin = self.members[ -1 ].get_this_offset()
-        #
-        #last_member_size = self.members[ -1 ].get_type().get_size() <- not EBOInheritance here yet
-        #if last_member_size == None:
-        #    last_member_size = 0
-        #
-        #last_member_end = last_member_begin + last_member_size
-        #
-        #if member_begin < last_member_end:
-        #    raise TypeNotWellDefinedError( \
-        #        'Member %s in struct %s lays before previous member end (this+%d/this+%d)' \
-        #            % ( member.get_name(), self.get_name(), member_begin, last_member_end ) )
-
-        # member out of a struct
-        if member_begin >= self.get_size():
-            raise TypeNotWellDefinedError( \
-                'Member %s in struct %s is outside struct (this+%d/%d)' \
-                    % ( member.get_name(), self.get_name(), member_begin, self.get_size() ) )
-
-        return True
 
     def get_members( self ):
         return self.members
@@ -618,7 +587,77 @@ class StructType( IType ):
         for member in members:
             self.add_member( member )
 
+    def validate( self ):
+        Alignment.validate( self.get_alignment(), self.get_size() )
+
+        if len( self.members ) == 0:
+            return True
+
+        for ( prev, current ) in zip( self.members[ 0 : -1 ], self.members[ 1 : ] ):
+            self._validate_members_layout( prev, current )
+
+        return True
+
     # details
+
+    def _validate_member_not_none( self, member ):
+        if member == None:
+            raise( TypeNotWellDefinedError( \
+                'Member %s in struct %s can not be None' ) \
+                    % ( member.get_name(), self.get_name() ) )
+
+        return True
+
+    def _validate_member_this0( self, member ):
+        if member.get_this_offset() == 0:
+            return True
+        else:
+            raise TypeNotWellDefinedError( \
+                'Member %s in struct %s has to be at (this+0/%d)' \
+                    % ( member.get_name(), self.get_name(), member.get_this_offset() ) )
+
+    def _validate_members_layout( self, prev_member, current_member ):
+        if prev_member.get_end() > current_member.get_this_offset():
+            raise TypeNotWellDefinedError( \
+                'Member (%s) in struct %s lays (this+%d) before previous member (%s) ends (this+%d)' \
+                    % ( current_member.get_name() \
+                        , self.get_name() \
+                        , current_member.get_this_offset() \
+                        , prev_member.get_name() \
+                        , prev_member.get_end() \
+                    ) \
+            )
+
+        if prev_member.get_end() < current_member.get_this_offset():
+            raise TypeNotWellDefinedError( \
+                'Member (%s) in struct %s lays (this+%d) after member (%s) ends (this+%d)' \
+                    % ( current_member.get_name() \
+                        , self.get_name() \
+                        , current_member.get_this_offset() \
+                        , prev_member.get_name() \
+                        , prev_member.get_end() \
+                    ) \
+            )
+
+        return True
+
+    def _validate_member_out_of_struct( self, member ):
+        member_begin = member.get_this_offset()
+
+        if member_begin >= self.get_size():
+            raise TypeNotWellDefinedError( \
+                'Member %s in struct %s is outside struct (this+%d/%d)' \
+                    % ( member.get_name(), self.get_name(), member_begin, self.get_size() ) )
+
+        return True
+
+    def _validate_member( self, member ):
+        self._validate_member_not_none( member )
+        self._validate_member_this0( member )
+        self._validate_member_overlaps_last_member( member )
+        self._validate_member_out_of_struct( member )
+
+        return True
 
     def _decorate_name( self, name ):
         return '{' + name + '}'
@@ -720,7 +759,7 @@ class Alignment:
         return True
 
 #
-# fix_size_and_alignment
+# fix_types_size_and_alignment
 #
 
 def try_set_alignment( type, alignment ):
@@ -736,7 +775,7 @@ def calculate_alignment_based_on_members( struct ):
 
     return gcd( alignment, struct.get_size() )
 
-def fix_size_and_alignment( struct ):
+def fix_types_size_and_alignment( struct ):
     if struct.get_is_valid() == False:
         return
 
@@ -744,11 +783,10 @@ def fix_size_and_alignment( struct ):
 
     if len( members ) == 0:
         try_set_alignment( struct, min( struct.get_size(), 8 ) )
-
         return
 
     # resolve all but last
-    for i in range( 0, len( members ) -1 ):
+    for i in range( 0, len( members ) - 1 ):
         member_size = members[ i + 1 ].get_this_offset() - members[ i ].get_this_offset()
 
         if member_size <= 0:
@@ -764,9 +802,12 @@ def fix_size_and_alignment( struct ):
 
     fix_size_and_alignment_aux( members[ -1 ], member_size )
 
+    # set alignment
     struct.set_alignment( calculate_alignment_based_on_members( struct ) )
 
-    postcondition( Alignment.validate( struct.get_alignment(), struct.get_size() ) )
+    # postcondition
+    Alignment.validate( struct.get_alignment(), struct.get_size() )
+
 
 def fix_size_and_alignment_aux( member, size ):
     if member.get_type().get_size() == None:
@@ -822,6 +863,9 @@ def find_and_create_padding_members( struct ):
         members_and_paddings.append( _create_padding( current, padding_size ) )
 
     struct.set_members( members_and_paddings )
+
+    # postcondition
+    postcondition( struct.validate() )
 
 #
 # ITypeVisitor for IType hierarchy
@@ -1814,12 +1858,12 @@ class FixSizeAlignmentVisitor( ITypeVisitor ):
         ITypeVisitor.__init__( self )
 
     def visit_struct_type( self, struct, * args ):
-        fix_size_and_alignment( struct )
+        fix_types_size_and_alignment( struct )
 
 #
-# DetectPaddingVisitor
+# FindPaddingVisitor
 #
-class DetectPaddingVisitor( ITypeVisitor ):
+class FindPaddingVisitor( ITypeVisitor ):
     def __init__( self ):
         ITypeVisitor.__init__( self )
 
@@ -2192,7 +2236,7 @@ class Application:
             types = self._fix_types( types )
 
             print( 'Finding paddings...' )
-            types = self._detect_padding( types )
+            types = self._find_padding( types )
 
             if self.config.verbose:
                 self._print_structs( types )
@@ -2324,8 +2368,8 @@ class Application:
 
         return packed_types
 
-    def _detect_padding( self, types ):
-        visitor = DetectPaddingVisitor()
+    def _find_padding( self, types ):
+        visitor = FindPaddingVisitor()
 
         for id, type in types.items():
             try:
