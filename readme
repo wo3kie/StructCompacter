@@ -28,4 +28,5 @@ _status       (+56)[int (4:4)]              |  ~
   
 ### AssocVector library content:
 * readme  - This file
+* license - Full text of the BSD license
 * bin/sc.py - Application  
