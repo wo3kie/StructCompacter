@@ -1,24 +1,51 @@
-<-               Class layout                  ->|<-    Optimized new class layout proposal       ->
-                                                 |
+######################################## Diff Output ########################################
 
 
-   Type name                                                             Member type alignment
-  /      Old size                                                           Member type size  \
-  |     /    New sise                                           Member type                 \ |
-  |     |   /                           Member name         This offset    \                | |
-  |     |   |                                      \                   \   |                | |
-  v     v   v                                      |                   |   |                | |
-{Mutex}(64/56)                                     v                   v   v                v v
-__inheritance      (+0)[d{LockableBase} (8:8)]   | __inheritance      (+0)[d{LockableBase} (8:8)]
-_attr              (+8)[u{._10} (4:4)]           | _attr              (+8)[u{._10} (4:4)]
-                  (+12)[char[4] (4:1)]           | _status           (+12)[int (4:4)]
-_mutex      ^     (+16)[u{._9} (40:8)]           | _mutex            (+16)[u{._9} (40:8)]
-_status     |     (+56)[int (4:4)]               | -
-            |     (+60)[char[4] (4:1)]           | -  ^
-          ^ |                                       ^ |
-          | |                                       | |
-          \ \                                       \ \
-           Paddings                                  Missing member (not padding)
+<-              Class layout                ->|<-   Optimized new class layout proposal   ->
+                                              |
 
-                                                 |
-<-               Class layout                  ->|<-    Optimized new class layout proposal       ->
+   Type name                                                        Member type alignment
+  /      Old size                                                      Member type size  \
+  |     /    New sise                                      Member type                 \ |
+  |     |   /                        Member name       this offset    \                | |
+  |     |   |                                   \                 \   |                | |
+  v     v   v                                   |                 |   |                | |
+{Mutex}(64/56)                                  v                 v   v                v v
+__inheritance    (+0)[d{LockableBase} (8:8)]  | __inheritance    (+0)[d{LockableBase} (8:8)]
+_attr            (+8)[u{._10} (4:4)]          | _attr            (+8)[u{._10} (4:4)]
+                (+12)[char[4] (4:1)]          | _status         (+12)[int (4:4)]
+_mutex      ^   (+16)[u{._9} (40:8)]          | _mutex          (+16)[u{._9} (40:8)]
+_status     |   (+56)[int (4:4)]              | -
+            |   (+60)[char[4] (4:1)]          | -
+          ^ |                                   ^
+          | |                                   |
+          \ \                                   \
+           Paddings                              Missing member (not padding)
+
+                                              |
+<-              Class layout                ->|<-   Optimized new class layout proposal   ->
+
+######################################## Debug Output ########################################
+
+    If T type is template type and its size may be template dependent
+                            If C ype was completely defined in DWARF \
+             If V type is well defined (size & alignment are valid) \|
+                                                     Type is valid \||
+                                                 Type alignment   \|||
+ DIE Id (offset in DWARF stream)   Total padding size in type  \  ||||
+/      Type name                                 Type size   \ |  ||||
+|     /                                                   \  | |  ||||
+|     |                                                   |  | |  ||||
+v     v                                                   v  v v  vvvv
+120ff _Rb_tree_impl<std::less<Code<8ul, unsigned int>... (48/7/8)(VWCT)
+    __ebo_inheritance {allocator<std::_Rb_tree_n...} [this+0]
+    _M_key_compare [{less<Code<8ul, un...} (1:1)] [this+0]
+              char[7] [this+1]
+  ^ _M_header [{_Rb_tree_node_base} (32:8)] [this+8]
+  | _M_node_count [long unsigned int (8:8)] [this+40]
+  | ^              ^                  ^ ^    ^
+  | |              |                  | |    |
+  | \              \                  | |    \
+  \  Member name    Member type       | \     Member this offset
+   Padding                            \  Member type alignment
+                                       Member type size
