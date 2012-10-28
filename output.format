@@ -1,0 +1,24 @@
+<-                Class layout                   ->|<-     Optimized new class layout proposal        ->
+                                                   |
+
+
+    Type name
+   /      Old size                                                      Member type alignment
+  |      /    New sise                                                     Member type size  \
+  |     |    /                         Member name            Member type \                \  |
+  |     |   |                                     \       This offset \    |                | |
+  v     v   v                                      |                   |   |                | |
+{Mutex}(64/56)                                     v                   v   v                v v
+__inheritance      (+0)[d{LockableBase} (8:8)]   | __inheritance      (+0)[d{LockableBase} (8:8)]
+_attr              (+8)[u{._10} (4:4)]           | _attr              (+8)[u{._10} (4:4)]
+                  (+12)[char[4] (4:1)]           | _status           (+12)[int (4:4)]
+_mutex      ^     (+16)[u{._9} (40:8)]           | _mutex            (+16)[u{._9} (40:8)]
+_status     |     (+56)[int (4:4)]               | -
+            |     (+60)[char[4] (4:1)]           | -  ^
+          ^ |                                       ^ |
+          | |                                       | |
+           \ \                                         \ \
+            Paddings                                    Missing member (not padding)
+
+                                                 |
+<-               Class layout                  ->|<-    Optimized new class layout proposal       ->

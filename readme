@@ -29,4 +29,5 @@ _status       (+56)[int (4:4)]              |  ~
 ### StructCompacter application content:
 * readme  - This file
 * license - Full text of the BSD license
+* output.format - Text file with script output explanation
 * bin/sc.py - Application  
