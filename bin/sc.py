@@ -2233,8 +2233,13 @@ class Application:
         if len( self.config.types ) == 0:
             return True
 
-        if struct._get_name() in self.config.types:
-            return True
+        for pattern in self.config.types:
+            if pattern[ -1 ] == '*':
+                if struct._get_name().startswith( pattern[ 0 : -1 ] ):
+                    return True
+            else:
+                if struct._get_name() == pattern:
+                    return True
 
         return False
 
@@ -2352,14 +2357,27 @@ def process_argv( argv ):
         description =
             "StructCompacter reads object (*.o) file in ELF format and using DWARF debug info"
             " detects structs and theirs members, calculates padding and tries such shuffle with"
-            " members to minimalize padding space.",
+            " members to minimalize padding space and save memory.",
 
         epilog =
-            "Examples:\n"
-            "cc.py application.o\n"
-            "cc.py -d -t SomeType application.o\n"
-            "cc.py -o stdout application.o\n"
-            "Author: Lukasz Czerwinski (wo3kie@gmail.com)(https://github.com/wo3kie/StructCompacter)"
+            "examples:\n\n"
+            "  Process file, save original type and packed one to files (*.old.sc/*.new.sc)\n"
+            "  cc.py application.o\n\n"
+
+            "  Process specified type, save original type and packed one to files (*.old.sc/*.new.sc)\n"
+            "  cc.py -t SomeType -- application.o\n\n"
+
+            "  Process file, save simple diff of type and packed one to one file (*.sc)\n"
+            "  cc.py -d application.o\n\n"
+
+            "  Process specified type, show result on screen\n"
+            "  cc.py -s -t SomeType -- application.o\n\n"
+
+            "  Process specified types, show it details, show result on screen\n"
+            "  cc.py -s -v -t SomeTypes* -- application.o\n\n"
+
+            "author:\n\n"
+            "  Lukasz Czerwinski (wo3kie@gmail.com)(https://github.com/wo3kie/StructCompacter)"
     )
 
     parser.add_argument(
@@ -2367,7 +2385,8 @@ def process_argv( argv ):
         default=[],
         nargs='+',
         help=
-            'Process only particular types.'
+            'Process only particular types (eg.: MyType), '
+            'common prefix may be specified with asterix (eg.: vector*).'
     )
 
     parser.add_argument(
@@ -2375,7 +2394,7 @@ def process_argv( argv ):
         action='store_true',
         default=False,
         help=
-            'Print debug information.'
+            'Print struct layout before compression.'
     )
 
     parser.add_argument(
@@ -2383,7 +2402,7 @@ def process_argv( argv ):
         action='store_true',
         default=False,
         help=
-            'Output redirection to stdout instead of create files.'
+            'Redirect output to stdout instead of create file(s).'
     )
 
     parser.add_argument(
@@ -2399,7 +2418,9 @@ def process_argv( argv ):
         default=50,
         type=int,
         help=
-            'Width of output in columns (Not less than 30).'
+            'Width of output in columns. To enforce outputs width types name'
+            ' and members name are cut (eg. memb...). Minimal value'
+            ' is 30. By default 50 is set.'
     )
 
     parser.add_argument(
@@ -2407,7 +2428,8 @@ def process_argv( argv ):
         action='store_true',
         default=False,
         help=
-            'Shows simple diff instead of creating files (.old/.new)'
+            'Create one file (*.sc) with simple diff instead of creating two files '
+            '(*.old.sc/*.new.sc). Diff is implicitly set when --stdout option is used.'
     );
 
     parser.add_argument(
