@@ -9,12 +9,12 @@ from fractions import gcd
 
 # pyelftools should be installed in Python directory
 
-#if sys.platform.startswith( 'win' ):
-#    sys.path.append( '..\\3rdParty\\pyelftools-0.20' )
-#elif sys.platform.startswith( 'linux' ):
-#    sys.path.append( '../3rdParty/pyelftools-0.20' )
-#else:
-#    exit( 'Apple?' )
+if sys.platform.startswith( 'win' ):
+    sys.path.append( '3rdParty\\pyelftools-0.20' )
+elif sys.platform.startswith( 'linux' ):
+    sys.path.append( '3rdParty/pyelftools-0.20' )
+else:
+    exit( 'Apple?' )
 
 from elftools.elf.elffile import ELFFile
 from elftools.common.exceptions import ELFError
@@ -613,7 +613,7 @@ class StructType( IType ):
             return True
         else:
             raise TypeNotWellDefinedError( \
-                'Member %s in struct %s has to be at (this+0/%d)' \
+                'Member %s in struct %s has to be at this+0 (%d)' \
                     % ( member.get_name(), self.get_name(), member.get_this_offset() ) )
 
     def _validate_members_layout( self, prev_member, current_member ):
@@ -766,6 +766,10 @@ def try_set_alignment( type, alignment ):
     if type.get_alignment() == None or type.get_alignment() > alignment:
         type.set_alignment( alignment )
 
+def try_set_size( type, size ):
+    if type.get_size() == None:
+        type.set_size( size )
+
 def calculate_alignment_based_on_members( struct ):
     alignment = 1
 
@@ -774,6 +778,55 @@ def calculate_alignment_based_on_members( struct ):
             alignment = max( alignment, member.get_type().get_alignment() )
 
     return gcd( alignment, struct.get_size() )
+
+def _fix_size_alignment_ebo_impl( struct, i ):
+    members = struct.get_members()
+
+    if i + 1 == len( members ):
+        i = -1
+
+    if not is_inheritance( members[ i ] ):
+        raise TypeNotWellDefinedError( 'In struct (%s) member (%s) size is =0' \
+            % ( struct.get_name(), members[ i ].get_name() ) )
+
+    if is_empty_struct( members[ i ].get_type() ):
+        members[ i ] = EBOInheritance( members[ i ].get_type(), members[ i ].get_this_offset() )
+
+        # even though EBO, size in DWARF may be >1
+        try_set_size( members[ i ].get_type(), 1 )
+
+        members[ i ].get_type().set_alignment( 1 )
+    elif ( i != -1 ) and is_empty_struct( members[ i + 1 ].get_type() ):
+        # class Derived : EmptyBase1, Base2, EmptyBase3 {}
+        #       ->   class Derived : EmptyBase1, EmptyBase3, Base2 {}
+        ( members[ i ], members[ i + 1 ] ) = ( members[ i + 1 ], members[ i ] )
+        members[ i ] = EBOInheritance( members[ i ].get_type(), members[ i ].get_this_offset() )
+
+        # even though EBO, size in DWARF may be >1
+        try_set_size( members[ i ].get_type(), 1 )
+    else:
+        raise TypeNotWellDefinedError( 'In struct (%s) member (%s) size is =0' \
+            % ( struct.get_name(), members[ i ].get_name() ) )
+
+def _fix_size_alignment_member_impl( struct, i, member_size ):
+    members = struct.get_members()
+
+    try_set_size( members[ i ].get_type(), member_size )
+
+    alignment = Alignment.get_from_position_and_type_size( \
+        members[ i ].get_this_offset(), members[ i ].get_type().get_size() )
+
+    try_set_alignment( members[ i ].get_type(), alignment )
+
+def _fix_types_size_and_alignment_impl( struct, i, member_size ):
+    if member_size < 0:
+        raise TypeNotWellDefinedError( 'In struct (%s) member (%s) size is <0 (%d)' \
+            % ( struct.get_name(), struct.get_members()[ i ].get_name(), member_size ) )
+
+    if member_size == 0:
+        _fix_size_alignment_ebo_impl( struct, i )
+    else:
+        _fix_size_alignment_member_impl( struct, i, member_size )
 
 def fix_types_size_and_alignment( struct ):
     if struct.get_is_valid() == False:
@@ -786,37 +839,21 @@ def fix_types_size_and_alignment( struct ):
         return
 
     # resolve all but last
-    for i in range( 0, len( members ) - 1 ):
-        member_size = members[ i + 1 ].get_this_offset() - members[ i ].get_this_offset()
+    for i in range( 0, len( members ) ):
+        if i + 1 == len( members ):
+            member_end = struct.get_size()
+        else:
+            member_end = members[ i + 1 ].get_this_offset()
 
-        if member_size <= 0:
-            members[ i ] = EBOInheritance( members[ i ].get_type(), members[ i ].get_this_offset() )
+        member_size = member_end - members[ i ].get_this_offset()
 
-        fix_size_and_alignment_aux( members[ i ], member_size )
-
-    # resolve last
-    member_size = struct.get_size() - members[ -1 ].get_this_offset()
-
-    if member_size <= 0:
-        members[ i ] = EBOInheritance( members[ i ].get_type(), members[ i ].get_this_offset() )
-
-    fix_size_and_alignment_aux( members[ -1 ], member_size )
+        _fix_types_size_and_alignment_impl( struct, i, member_size )
 
     # set alignment
     struct.set_alignment( calculate_alignment_based_on_members( struct ) )
 
     # postcondition
     Alignment.validate( struct.get_alignment(), struct.get_size() )
-
-
-def fix_size_and_alignment_aux( member, size ):
-    if member.get_type().get_size() == None:
-        member.get_type().set_size( size )
-
-    alignment \
-        = Alignment.get_from_position_and_type_size( member.get_this_offset(), member.get_type().get_size() )
-
-    try_set_alignment( member.get_type(), alignment )
 
 #
 # find_and_create_padding_members
@@ -843,7 +880,8 @@ def find_and_create_padding_members( struct ):
 
         if padding_size < 0:
             struct.set_is_valid( False )
-            raise TypeNotWellDefinedError( 'Padding size < 0 in type %s' % struct.get_name() )
+            raise TypeNotWellDefinedError( 'Padding size is <0 (%d) between (%s,%s) in type (%s)' \
+                % ( padding_size, current.get_name(), next.get_name(), struct.get_name() ) )
 
         members_and_paddings.append( current )
 
@@ -855,7 +893,11 @@ def find_and_create_padding_members( struct ):
 
     if padding_size < 0:
         struct.set_is_valid( False )
-        raise TypeNotWellDefinedError( 'Padding size < 0 in type %s' % struct.get_name() )
+
+        print( '>', struct.get_name(), struct.get_size(), current.get_this_offset(), current.get_size() )
+
+        raise TypeNotWellDefinedError( 'Padding size is <0 (%d) between (%s,-) in type (%s)' \
+            % ( padding_size, current.get_name(), struct.get_name() ) )
 
     members_and_paddings.append( current )
 
@@ -968,6 +1010,34 @@ class IMemberVisitor:
         return self.default_handler( self, padding, * args )
 
 #
+# IsInheritanceVisitor
+#
+class IsInheritanceVisitor( IMemberVisitor ):
+    def __init__( self ):
+        IMemberVisitor.__init__( self )
+
+        self.is_inheritance = False
+
+    def visit_inheritance( self, inheritace, * args ):
+        self.is_inheritance = True
+
+    def visit_ebo_inheritance( self, ebo_inheritance, * args ):
+        self.is_inheritance = True
+
+    def get_and_reset( self ):
+        result = self.is_inheritance
+        self.is_inheritance = False
+
+        return result
+
+def is_inheritance( member ):
+    is_inheritance_visitor = IsInheritanceVisitor()
+
+    member.accept( is_inheritance_visitor )
+
+    return is_inheritance_visitor.get_and_reset()
+
+#
 # CalculateTotalPaddingVisitor
 #
 class CalculateTotalPaddingVisitor( IMemberVisitor ):
@@ -1042,6 +1112,36 @@ def print_diff_of_structs( struct1, struct2, width ):
         for i in range( members_size, compacted_size ):
             member2 = struct2.get_members()[ i ]
             print( empty_member_string, '|', format_member( member2, width ) )
+
+#
+# IsEmptyStructVisitor
+#
+class IsEmptyStructVisitor( ITypeVisitor ):
+    def __init__( self ):
+        ITypeVisitor.__init__( self )
+
+        self.is_empty_struct = False
+
+    def visit_struct_type( self, struct, * args ):
+        for member in struct.get_members():
+            if is_empty_struct( member.get_type() ) == False:
+                return
+
+        self.is_empty_struct = True
+
+    def get_and_reset( self ):
+        result = self.is_empty_struct
+
+        self.is_empty_struct = False
+
+        return result
+
+def is_empty_struct( type ):
+    is_empty_struct_visitor = IsEmptyStructVisitor()
+
+    type.accept( is_empty_struct_visitor )
+
+    return is_empty_struct_visitor.get_and_reset()
 
 #
 # IsTemplateParamDependentVisitor
@@ -1885,7 +1985,7 @@ class CompactStructVisitor( ITypeVisitor ):
         else:
             self.packed = StructCompacter().process( struct )
 
-    def get_and_clear( self ):
+    def get_and_reset( self ):
         result = self.packed
         self.packed = None
 
@@ -2357,7 +2457,7 @@ class Application:
             try:
                 type.accept( visitor, None )
 
-                packed = visitor.get_and_clear()
+                packed = visitor.get_and_reset()
 
                 if packed:
                     packed_types.append( ( type, packed ) )
@@ -2390,6 +2490,9 @@ class Application:
             try:
                 type.accept( visitor, None )
             except EBOError as error:
+                if self.config.warnings:
+                    print( 'Warning: ', error )
+            except TypeNotWellDefinedError as error:
                 if self.config.warnings:
                     print( 'Warning: ', error )
 
