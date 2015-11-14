@@ -9,7 +9,7 @@ StructCompacter reads object (*.o) file in ELF format and using DWARF debug info
   
   
 ### How to use is?
-```{r, engine='bash'}
+```
 >python bin\sc.py priv\library.o
 Reading DWARF (may take some time)...
 Fixing types...
