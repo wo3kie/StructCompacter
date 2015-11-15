@@ -1,14 +1,15 @@
+## Copyright (C) 2012 Łukasz Czerwiński
+  
 ## StructCompacter
-StructCompacter reads object (*.o) file in ELF format and using DWARF debug info detects structs and theirs members, calculates padding and tries such shuffle with members to minimalize padding space and save memory.
+StructCompacter reads object (\*.o) file in ELF format and using DWARF debug info section detects structs and theirs members, calculates padding and tries such shuffle with members to minimalize padding space and save memory.
   
-## Copyright (C) 2012 Lukasz Czerwinski
+## Website
+https://github.com/wo3kie/structCompacter
+
+## Requirements
+pyelftool library (https://bitbucket.org/eliben/pyelftools)
   
-  
-### Requirements
-* pyelftool library (https://bitbucket.org/eliben/pyelftools)
-  
-  
-### How to use is?
+## How to run it?
 ```
 >python bin\sc.py priv\library.o
 Reading DWARF (may take some time)...
@@ -28,8 +29,3 @@ _status       (+56)[int (4:4)]              |  ~
               (+60)[char[4] (4:1)]          |  ~
 ```
 
-### StructCompacter application content:
-* readme  - This file
-* license - Full text of the BSD license
-* output.format - Text file with script output explanation
-* bin/sc.py - Application  
